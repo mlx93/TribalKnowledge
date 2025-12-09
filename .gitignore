@@ -1,0 +1,21 @@
+# OS files
+.DS_Store
+__MACOSX/
+
+# Zip files
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+.env.local
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Data files (optional - uncomment to exclude large data)
+# DABstep-postgres/data/payments.csv
+
