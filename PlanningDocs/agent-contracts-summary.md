@@ -6,7 +6,8 @@
 **Purpose**: Human-readable overview of agent inputs, outputs, and handoffs
 
 For detailed TypeScript interfaces, see `agent-contracts-interfaces.md`.  
-For execution model and validation rules, see `agent-contracts-execution.md`.
+For execution model and validation rules, see `agent-contracts-execution.md`.  
+For shared utilities (error codes, config schemas, LLM wrapper, logging), see Appendices A-E in `agent-contracts-interfaces.md`.
 
 ---
 
@@ -15,7 +16,7 @@ For execution model and validation rules, see `agent-contracts-execution.md`.
 The Tribal Knowledge system consists of four agents that work in sequence, each passing structured data to the next. The key innovation is **domain-based parallelization**: the Planner groups tables into business domains, and the Documenter processes each domain independently in parallel.
 
 ```
-Planner → Documenter → Indexer → Retriever
+Planner -> Documenter -> Indexer -> Retriever
 ```
 
 ---
@@ -211,9 +212,9 @@ Exposes the indexed documentation via MCP tools that external AI agents can quer
 
 | Boundary | Contract File | Key Contents |
 |----------|---------------|--------------|
-| **Planner → Documenter** | `progress/documentation-plan.json` | Work units with table lists, domain assignments, estimated times, content hashes |
-| **Documenter → Indexer** | `docs/documentation-manifest.json` | Completion status, list of all generated files with paths and content hashes |
-| **Indexer → Retriever** | `data/tribal-knowledge.db` | SQLite database with documents, search indexes, relationship data |
+| **Planner -> Documenter** | `progress/documentation-plan.json` | Work units with table lists, domain assignments, estimated times, content hashes |
+| **Documenter -> Indexer** | `docs/documentation-manifest.json` | Completion status, list of all generated files with paths and content hashes |
+| **Indexer -> Retriever** | `data/tribal-knowledge.db` | SQLite database with documents, search indexes, relationship data |
 
 ---
 
@@ -261,6 +262,22 @@ This is possible because:
 | Generated docs | `docs/databases/{db}/` |
 | Documentation manifest | `docs/documentation-manifest.json` |
 | Search database | `data/tribal-knowledge.db` |
+
+---
+
+## Shared Utilities
+
+All four agents share common infrastructure defined in the appendices of `agent-contracts-interfaces.md`:
+
+- **Error Code Registry** (Appendix A): Canonical list of all error codes. Developers must not invent new codes without adding them here first. Codes are prefixed by agent (PLAN_, DOC_, IDX_, RET_).
+
+- **Config File Schemas** (Appendix B): TypeScript interfaces and YAML examples for `databases.yaml` (database connections) and `agent-config.yaml` (agent behavior settings like parallelism, timeouts, LLM models).
+
+- **LLM Wrapper Interface** (Appendix C): Shared interface for all LLM calls. Handles template loading, variable substitution, retries, and token tracking. All agents use this rather than calling APIs directly.
+
+- **Logging Contract** (Appendix D): Structured JSON log format with correlation IDs for tracing requests across agents. Work unit IDs enable filtering parallel execution logs.
+
+- **Example Contract Files** (Appendix E): Realistic examples of `documentation-plan.json` and `documentation-manifest.json` showing actual field values and structure.
 
 ---
 
