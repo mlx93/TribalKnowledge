@@ -109,28 +109,28 @@
 
 ## What's Left to Build
 
-### Phase 1: Foundation (PARTIALLY COMPLETE)
+### Phase 1: Foundation (COMPLETE ✅)
 - [x] TypeScript project initialization ✅
 - [x] Package.json with dependencies ✅
 - [x] Directory structure creation ✅
 - [x] PostgreSQL database connector ✅
 - [x] Basic metadata extraction (tables, columns, keys) ✅
-- [ ] Simple Markdown documentation generation (Documenter not yet implemented)
+- [x] Simple Markdown documentation generation ✅
 - [x] SQLite database setup ✅
 - [x] FTS5 full-text search index ✅
 - [ ] Basic `search_tables` MCP tool (Retrieval agent not yet implemented)
 - [x] Progress tracking file structure ✅
 - [x] Initial prompt templates (column, table) ✅
 
-**Status**: Foundation infrastructure complete. Planner and Indexer built. Documenter and Retriever pending.
+**Status**: Foundation infrastructure complete. Planner, Documenter, and Indexer built. Retriever pending.
 
-### Phase 2: Semantic Layer (PARTIALLY COMPLETE)
+### Phase 2: Semantic Layer (MOSTLY COMPLETE ✅)
 - [x] OpenAI embeddings API integration ✅
 - [x] sqlite-vec vector storage setup ✅
 - [ ] Hybrid search implementation (FTS5 + vector) - Retrieval agent pending
 - [ ] Reciprocal Rank Fusion (RRF) algorithm - Retrieval agent pending
-- [ ] LLM-based semantic inference for columns - Documenter pending
-- [ ] LLM-based semantic inference for tables - Documenter pending
+- [x] LLM-based semantic inference for columns ✅
+- [x] LLM-based semantic inference for tables ✅
 - [x] Schema Analyzer (Planner) implementation ✅
 - [x] documentation-plan.json generation ✅
 - [x] Automatic domain detection ✅
@@ -139,7 +139,7 @@
 - [ ] Complete MCP tools (get_table_schema, get_join_path, etc.) - Retrieval agent pending
 - [x] domain-inference.md prompt template ✅
 
-**Status**: Planner and Indexer complete with semantic capabilities. Documenter and Retriever needed for full semantic layer.
+**Status**: Planner, Documenter, and Indexer complete with semantic capabilities. Retriever needed for search functionality.
 
 ### Phase 3: Snowflake & Scale (NOT STARTED)
 - [ ] Snowflake database connector
@@ -178,12 +178,12 @@
 
 **Overall Status**: Planning Complete, Implementation In Progress
 
-**Phase**: Implementation Phase 2 (Semantic Layer)
+**Phase**: Implementation Phase 2 (Semantic Layer) - Mostly Complete
 
-**Completion**: ~40% (Planning: 100%, Implementation: ~40%)
+**Completion**: ~75% (Planning: 100%, Implementation: ~75%)
 - ✅ Planner (Schema Analyzer): Complete
+- ✅ Documenter: Complete
 - ✅ Indexer: Complete
-- ⏳ Documenter: Not yet implemented
 - ⏳ Retriever (MCP Server): Not yet implemented
 
 **Codebase Location**: `TribalAgent/` directory
@@ -194,9 +194,9 @@
 - None identified - planning documents are comprehensive
 
 ### Implementation Issues
-- Documenter agent not yet implemented (blocks full pipeline)
 - Retriever/MCP server not yet implemented (blocks search functionality)
 - End-to-end testing pending (Planner → Documenter → Indexer → Retriever)
+- Documenter README is outdated (claims Phase 1 only, but implementation is complete)
 
 ### Technical Debt
 - Tests exist for Planner and Indexer but full integration test suite pending

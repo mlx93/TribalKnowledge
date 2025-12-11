@@ -50,9 +50,17 @@ The project is currently in the **implementation phase**. The Planner (Schema An
   - CLI command: `npm run index`
   - Populates `data/tribal-knowledge.db` with FTS5 and vector indices
 
-- **Documenter Agent**: ⏳ PENDING
-  - Sub-agents defined (TableDocumenter, ColumnInferencer)
-  - Main documenter implementation needed
+- **Documenter Agent**: ✅ COMPLETE
+  - Fully implemented in `TribalAgent/src/agents/documenter/`
+  - Successfully compiled and built
+  - CLI command: `npm run document`
+  - Complete implementation including:
+    - Work unit processing
+    - TableDocumenter and ColumnInferencer sub-agents with LLM integration
+    - Markdown and JSON Schema generation
+    - Documentation manifest generation
+    - Checkpoint recovery
+    - Progress tracking
 
 - **Retriever/MCP Server**: ⏳ PENDING
   - Hybrid search logic exists (`src/agents/retrieval/search/hybrid-search.ts`)
@@ -68,16 +76,9 @@ The project is currently in the **implementation phase**. The Planner (Schema An
 
 ## Next Steps
 
-### Immediate Next Steps (Complete Remaining Agents)
+### Immediate Next Steps (Complete Remaining Agent)
 
-1. **Documenter Agent Implementation**
-   - Implement main documenter entry point
-   - Integrate TableDocumenter and ColumnInferencer sub-agents
-   - Generate Markdown documentation from plan
-   - Create documentation manifest for Indexer
-   - CLI command: `npm run document`
-
-2. **Retriever/MCP Server Implementation**
+1. **Retriever/MCP Server Implementation**
    - Implement MCP tool handlers
    - Complete hybrid search integration
    - Add context budgeting and compression
@@ -92,9 +93,9 @@ The project is currently in the **implementation phase**. The Planner (Schema An
 
 ### Current Goals
 
-- Complete Documenter to enable full documentation generation
 - Complete Retriever to enable search functionality
-- Achieve end-to-end pipeline working
+- Achieve end-to-end pipeline working (Planner → Documenter → Indexer → Retriever)
+- Update Documenter README to reflect full implementation status
 
 ## Active Decisions and Considerations
 
@@ -120,7 +121,6 @@ The project is currently in the **implementation phase**. The Planner (Schema An
 
 ### Current Blockers
 
-- Documenter agent needed to complete documentation generation
 - Retriever/MCP server needed to enable search functionality
 
 ## Active Files and Locations
@@ -141,9 +141,9 @@ The project is currently in the **implementation phase**. The Planner (Schema An
 
 ### Implementation Code
 - `TribalAgent/src/agents/planner/` - Planner implementation ✅
+- `TribalAgent/src/agents/documenter/` - Documenter implementation ✅ (fully complete)
 - `TribalAgent/src/agents/indexer/` - Indexer implementation ✅
-- `TribalAgent/src/agents/documenter/` - Documenter skeleton (sub-agents exist)
-- `TribalAgent/src/agents/retrieval/` - Retrieval skeleton (hybrid search exists)
+- `TribalAgent/src/agents/retrieval/` - Retrieval skeleton (hybrid search exists, MCP tools pending)
 - `TribalAgent/src/connectors/` - Database connectors ✅
 - `TribalAgent/src/contracts/` - Type definitions and validators ✅
 - `TribalAgent/src/utils/` - Shared utilities ✅
@@ -159,16 +159,16 @@ The project is currently in the **implementation phase**. The Planner (Schema An
 - [x] TypeScript project setup ✅
 - [x] PostgreSQL connector ✅
 - [x] Basic metadata extraction ✅
-- [ ] Simple Markdown generation (Documenter pending)
+- [x] Simple Markdown generation ✅
 - [x] SQLite + FTS5 setup ✅
 - [ ] Basic search_tables tool (Retriever pending)
 - [x] Initial prompt templates ✅
 
-### Phase 2: Semantic Layer (Week 3-4) - ⏳ IN PROGRESS
+### Phase 2: Semantic Layer (Week 3-4) - ✅ MOSTLY COMPLETE
 - [x] OpenAI embeddings integration ✅
 - [x] sqlite-vec setup ✅
 - [ ] Hybrid search implementation (Retriever pending)
-- [ ] LLM semantic inference (Documenter pending)
+- [x] LLM semantic inference ✅
 - [x] Schema Analyzer (Planner) ✅
 - [x] Domain detection ✅
 - [ ] Complete MCP tools (Retriever pending)

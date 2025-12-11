@@ -69,8 +69,8 @@ A deep agent system that:
 - Test database setup (DABstep-postgres) available
 - **Implementation Status**:
   - ✅ Planner (Schema Analyzer): Fully implemented and built
+  - ✅ Documenter: Fully implemented and built
   - ✅ Indexer: Fully implemented and built
-  - ⏳ Documenter: Pending implementation
   - ⏳ Retriever/MCP Server: Pending implementation
 - **Codebase Location**: `TribalAgent/` directory
 
@@ -86,8 +86,8 @@ A deep agent system that:
 
 - **Codebase**: `TribalAgent/` directory
 - **Planner**: ✅ Implemented (`src/agents/planner/`) - Generates documentation plans
+- **Documenter**: ✅ Implemented (`src/agents/documenter/`) - Generates Markdown and JSON documentation with LLM semantic inference
 - **Indexer**: ✅ Implemented (`src/agents/indexer/`) - Builds search index
-- **Documenter**: ⏳ Pending - Sub-agents exist, main orchestration needed
 - **Retriever**: ⏳ Pending - Hybrid search logic exists, MCP tools needed
 
 ## Constraints
