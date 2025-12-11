@@ -261,7 +261,7 @@ interface TableSpec {
   domain: DomainName;
   priority: TablePriority;                        // 1=core, 2=standard, 3=system
   column_count: number;
-  row_count_approx: number;                       // From pg_class.reltuples or COUNT(*)
+  row_count_approx: number;                       // From pg_class.reltuples (Postgres) or INFORMATION_SCHEMA.TABLES.ROW_COUNT (Snowflake) - NEVER use COUNT(*)
   incoming_fk_count: number;                      // Tables that reference this via FK
   outgoing_fk_count: number;                      // Tables this references via FK
   metadata_hash: ContentHash;                     // Hash of column names + types
@@ -354,7 +354,21 @@ export function computeTableMetadataHash(table: TableMetadata): ContentHash {
 **File**: `src/contracts/validators.ts`
 
 Implement validation functions for the plan output as specified in `agent-contracts-execution.md:221-264`:
-- `validatePlan(plan: unknown): DocumentationPlan`
+- `validatePlan(plan: unknown): ValidationResult<DocumentationPlan>`
+
+Where `ValidationResult<T>` is:
+```typescript
+interface ValidationResult<T> {
+  success: boolean;
+  data?: T;                    // Parsed/validated data if success=true
+  errors?: ValidationError[];  // Errors if success=false
+}
+
+interface ValidationError {
+  path: string;    // JSON path to the error (e.g., "databases[0].name")
+  message: string; // Human-readable error message
+}
+```
 - `validateWorkUnit(unit: unknown): void`
 - `validateNoCycles(workUnits: WorkUnit[]): void`
 
@@ -481,7 +495,9 @@ export async function inferDomains(
     return inferDomainsByPrefix(tables);
   }
 
-  const batchSize = config.max_tables_per_database ?? 100;
+  // Use domain_inference_batch_size for LLM batching (default: 100)
+  // max_tables_per_database is a separate limit for total tables processed
+  const batchSize = config.domain_inference_batch_size ?? 100;
 
   // For large databases, batch the domain inference calls
   if (tables.length > batchSize) {
@@ -697,6 +713,7 @@ export async function runPlanner(options: PlannerOptions = {}): Promise<Document
     }
 
     // Step 1: Load and validate configuration
+    // NOTE: config.databases is an ARRAY of DatabaseConfig objects, not an object map
     const config = await loadAndValidateConfig();
     if (!config.databases || config.databases.length === 0) {
       throw createPlannerError('configInvalid', 'No databases configured in databases.yaml');
@@ -733,18 +750,19 @@ export async function runPlanner(options: PlannerOptions = {}): Promise<Document
     }
 
     // Step 3: Analyze each database (include ALL configured DBs in output)
+    // config.databases is an array - iterate directly
     const databases: DatabaseAnalysis[] = [];
     const errors: AgentError[] = [];
 
-    for (const [dbName, dbConfig] of Object.entries(config.databases)) {
-      const result = await analyzeDatabase(dbName, dbConfig, logger);
+    for (const dbConfig of config.databases) {
+      const result = await analyzeDatabase(dbConfig.name, dbConfig, logger);
       if (result.success) {
         databases.push(result.analysis);
       } else {
         // IMPORTANT: Include unreachable databases with status='unreachable'
         // This ensures total_databases/reachable_databases are accurate
         databases.push({
-          name: dbName,
+          name: dbConfig.name,
           type: dbConfig.type,
           status: 'unreachable',
           connection_error: result.error,
@@ -818,11 +836,13 @@ export async function checkPlanStaleness(
   }
 
   // Level 2: Schema-level staleness (requires DB connection)
+  // NOTE: config.databases is an array of DatabaseConfig objects
   const changedDatabases: string[] = [];
 
   for (const dbAnalysis of existingPlan.databases) {
     if (dbAnalysis.status === 'unreachable') continue;
 
+    // Find matching config by name (config.databases is an array)
     const dbConfig = config.databases.find(d => d.name === dbAnalysis.name);
     if (!dbConfig) {
       changedDatabases.push(dbAnalysis.name); // DB removed from config
@@ -1022,7 +1042,40 @@ async function getAllRelationships(): Promise<{
 
 **Snowflake Equivalent** (`src/connectors/snowflake.ts`):
 - Use `INFORMATION_SCHEMA.TABLES.ROW_COUNT` (maintained automatically)
-- Use `SHOW IMPORTED KEYS IN DATABASE` for all FKs at once
+- FK queries must return BOTH directions:
+  - `SHOW IMPORTED KEYS IN DATABASE {db}` - returns outgoing FKs (table has FK to another)
+  - `SHOW EXPORTED KEYS IN DATABASE {db}` - returns incoming FKs (other tables reference this)
+
+```typescript
+// Snowflake: Get both directions
+async function getAllRelationshipsSnowflake(): Promise<{
+  relationships: Relationship[];
+  incomingCounts: Map<string, number>;
+  outgoingCounts: Map<string, number>;
+}> {
+  // Outgoing FKs: this table references another
+  const importedKeys = await this.execute('SHOW IMPORTED KEYS IN DATABASE');
+  // Incoming FKs: other tables reference this
+  const exportedKeys = await this.execute('SHOW EXPORTED KEYS IN DATABASE');
+
+  const incomingCounts = new Map<string, number>();
+  const outgoingCounts = new Map<string, number>();
+
+  // Process exported keys (incoming references)
+  for (const row of exportedKeys) {
+    const targetTable = `${row.pk_schema_name}.${row.pk_table_name}`;
+    incomingCounts.set(targetTable, (incomingCounts.get(targetTable) || 0) + 1);
+  }
+
+  // Process imported keys (outgoing references)
+  for (const row of importedKeys) {
+    const sourceTable = `${row.fk_schema_name}.${row.fk_table_name}`;
+    outgoingCounts.set(sourceTable, (outgoingCounts.get(sourceTable) || 0) + 1);
+  }
+
+  return { relationships: importedKeys, incomingCounts, outgoingCounts };
+}
+```
 
 **Performance Budget**:
 | Operation | Target | Notes |
@@ -1337,12 +1390,24 @@ const metrics = createMetricsCollector();
 metrics.startTimer('total');
 
 // ... planning logic ...
-metrics.increment('databases', databases.filter(d => d.status === 'reachable').length);
+
+// Count BOTH reachable and unreachable databases per PRD §12.2
+const reachableCount = databases.filter(d => d.status === 'reachable').length;
+const unreachableCount = databases.filter(d => d.status === 'unreachable').length;
+metrics.increment('databases', reachableCount);
+metrics.increment('databases_unreachable', unreachableCount);
 metrics.increment('tables', summary.total_tables);
 metrics.increment('domains', summary.domain_count);
 
 metrics.stopTimer('total');
-emitPlannerMetrics(metrics.getMetrics() as PlannerMetrics, logger, correlationId);
+
+// Ensure unreachable count is included in final metrics
+const finalMetrics = {
+  ...metrics.getMetrics(),
+  databases_analyzed: reachableCount,
+  databases_unreachable: unreachableCount,
+} as PlannerMetrics;
+emitPlannerMetrics(finalMetrics, logger, correlationId);
 ```
 
 ```typescript
@@ -1839,19 +1904,30 @@ services:
 - `openai` package is already installed (used for OpenRouter via OpenAI-compatible API)
 - No `@anthropic-ai/sdk` needed - using OpenRouter instead
 
-### NPM Packages NOT Used by Planner
+### NPM Packages Used by Planner
+
+| Package | Status | Purpose |
+|---------|--------|---------|
+| `openai` | REQUIRED | OpenRouter uses the OpenAI SDK with a custom baseURL. The `callLLMWithTemplate` function imports `OpenAI` to make LLM calls. |
+| `chalk` | REQUIRED | CLI output formatting |
+| `js-yaml` | REQUIRED | Config parsing (databases.yaml, agent-config.yaml) |
+| `zod` | REQUIRED | Runtime validation |
+| `commander` | REQUIRED | CLI framework |
+
+**Note**: The `openai` package is used as the client library for OpenRouter (OpenAI-compatible API). It is NOT used to call OpenAI directly. Example:
+
+```typescript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'https://openrouter.ai/api/v1',
+  apiKey: process.env.OPENROUTER_API_KEY,
+});
+```
 
 | Package | Status | Notes |
 |---------|--------|-------|
-| `openai` | NOT USED | Planner uses OpenRouter (OpenAI-compatible). Only Indexer uses OpenAI for embeddings. |
-| `@anthropic-ai/sdk` | NOT USED | All LLM calls go through OpenRouter. |
-
-**Dependency Cleanup**: If `openai` was listed as a Planner dependency, remove it. The Planner only needs:
-- `chalk` - CLI output
-- `js-yaml` - Config parsing
-- `zod` - Validation
-- `commander` - CLI framework
-- Node.js built-ins (`crypto`, `fs`, `path`)
+| `@anthropic-ai/sdk` | NOT USED | All LLM calls go through OpenRouter (not direct Anthropic API). |
 
 ### Environment Variables Required
 
