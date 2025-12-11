@@ -2,211 +2,146 @@
 
 ## Current Work Focus
 
-**Status**: Implementation In Progress - Planner & Indexer Complete
+**Status**: Implementation Complete - Planner, Documenter, Indexer All Working
 
-The project is currently in the **implementation phase**. The Planner (Schema Analyzer) and Indexer agents have been fully implemented and successfully built. The Documenter and Retriever agents are pending implementation.
+The project has completed implementation of the core pipeline agents. The full pipeline (plan → document → index) is operational. The Retriever/MCP Server is the final remaining agent.
 
-## Recent Changes
+## Recent Changes (December 11, 2025)
 
-### Completed Planning Documents
+### Schema Alignment Fixes (Latest)
+- **documents_vec column rename**: Changed from `id` to `document_id` to match expected schema for test compatibility
+  - Updated `init.ts`: vec0 virtual table now uses `document_id INTEGER PRIMARY KEY`
+  - Updated `populate.ts`: Insert/delete statements now use `document_id`
+  - Updated `hybrid-search.ts`: Join clause now uses `document_id`
+  - Updated `incremental.ts` and `optimize.ts`: All queries updated to use `document_id`
+  - Migration script created: `scripts/migrate-vec-to-vec0.ts` for converting existing databases
+- **vec0 embedding format fix**: Fixed critical bug where vec0 virtual table requires JSON array format, not BLOB
+  - Updated `populate.ts`: Now checks `isSqliteVecAvailable()` and inserts as JSON array for vec0, BLOB for fallback
+  - Updated `hybrid-search.ts`: Handles both JSON array (vec0) and BLOB (fallback) formats when reading embeddings
+  - Added `cosineSimilarityArrays()` method to work directly with number arrays
+- **8k token limit guard**: Enhanced embedding generation with better error handling
+  - More conservative character-per-token estimate (4 chars/token)
+  - Better logging when documents exceed limits
+  - Graceful handling of empty/invalid texts
+  - Explicit error messages for context window exceeded errors
 
-1. **Product Requirements Document (PRD1)** - `PlanningDocs/tribal-knowledge-prd1-product.md`
-   - User stories defined
-   - Functional and non-functional requirements
-   - Success criteria established
+### Documenter Enhancements
+- **Parallelized processing**: Tables processed in batches of 3, columns in batches of 5
+- **Manifest schema alignment**: Output now matches Indexer's expected schema
+- **Document splitting**: Large documents are split for embedding generation to avoid token limits
+- **npm scripts added**: `document:clean`, `document:fresh` for cache management
+- **Environment variable substitution**: Database credentials moved to `.env`, referenced via `${VAR}` in `databases.yaml` (commit: b69a5eb)
 
-2. **Technical Specification (PRD2)** - `PlanningDocs/tribal-knowledge-prd2-technical.md`
-   - Complete system architecture
-   - Database schema definitions
-   - MCP tool specifications
-   - Integration details
+### Indexer Enhancements
+- **sqlite-vec support**: Native vector operations enabled (vec0 virtual table)
+- **Extended extension paths**: Now searches platform-specific npm packages (darwin-arm64, darwin-x64, linux-x64) and additional system paths (commit: 36012aa)
+- **Blob fallback**: Graceful degradation if sqlite-vec unavailable
+- **npm scripts added**: `index:clean`, `index:fresh` for cache management
+- **Migration script**: Added `npm run index:migrate-vec0` for converting blob-based vec tables to vec0
+- **Embeddings key mismatch fix**: Fixed critical bug where embeddings were generated with semantic IDs but looked up by file paths. Now uses consistent identity format (`db.schema.table`) and dual-key lookup (filePath + identity)
+- **FK relationship extraction**: Enhanced regex patterns to match Unicode arrow `→` format used by TableDocumenter (e.g., `` `column` → `table.column` ``)
+- **Snowflake SDK verbosity**: Reduced logging level to WARN to suppress verbose connection details
 
-3. **Project Plan** - `PlanningDocs/tribal-knowledge-plan.md`
-   - 4-phase implementation plan
-   - Deep agent properties defined
-   - Success metrics
+### Git Configuration
+- **gitignore updates**: Separated memory-bank and sqlite-vec entries (commit: 3802faf)
+- **sqlite-vec build directory**: Added to gitignore (commit: 06ea47d)
 
-4. **Agent Contracts** - `PlanningDocs/agent-contracts-*.md`
-   - Interfaces defined (TypeScript)
-   - Execution model documented
-   - Contract handoffs specified
+### Pipeline Scripts
+- `npm run pipeline` - Full pipeline with caching
+- `npm run pipeline:fresh` - Clear all caches and rebuild
 
-5. **Orchestrator Plan** - `PlanningDocs/orchestrator-plan.md`
-   - Coordination layer design
-   - Smart detection logic
-   - Interactive workflow
+## Available npm Commands
 
-### Implementation Status
+All commands run from `TribalAgent/` with `npx dotenv-cli` prefix:
 
-- **Planner (Schema Analyzer)**: ✅ COMPLETE
-  - Fully implemented in `TribalAgent/src/agents/planner/`
-  - Successfully compiled and built
-  - CLI command: `npm run plan`
-  - Generates `progress/documentation-plan.json`
+### Main Pipeline
+| Command | Description |
+|---------|-------------|
+| `npm run pipeline` | Run full: plan → document → index |
+| `npm run pipeline:fresh` | Clear caches, then full pipeline |
 
-- **Indexer Agent**: ✅ COMPLETE
-  - Fully implemented in `TribalAgent/src/agents/indexer/`
-  - Successfully compiled and built
-  - CLI command: `npm run index`
-  - Populates `data/tribal-knowledge.db` with FTS5 and vector indices
+### Individual Agents
+| Command | Description |
+|---------|-------------|
+| `npm run plan` | Generate documentation plan |
+| `npm run document` | Generate docs (uses cache) |
+| `npm run document:clean` | Clear docs/ and progress |
+| `npm run document:fresh` | Clear + regenerate docs |
+| `npm run index` | Build search index |
+| `npm run index:clean` | Delete knowledge.db |
+| `npm run index:fresh` | Delete + rebuild index |
 
-- **Documenter Agent**: ✅ COMPLETE
-  - Fully implemented in `TribalAgent/src/agents/documenter/`
-  - Successfully compiled and built
-  - CLI command: `npm run document`
-  - Complete implementation including:
-    - Work unit processing
-    - TableDocumenter and ColumnInferencer sub-agents with LLM integration
-    - Markdown and JSON Schema generation
-    - Documentation manifest generation
-    - Checkpoint recovery
-    - Progress tracking
+### Utilities
+| Command | Description |
+|---------|-------------|
+| `npm run status` | Show pipeline status |
+| `npm run validate-prompts` | Validate prompt templates |
+| `npm run build` | Compile TypeScript |
+| `npm run test` | Run all tests |
 
-- **Retriever/MCP Server**: ⏳ PENDING
-  - Hybrid search logic exists (`src/agents/retrieval/search/hybrid-search.ts`)
-  - MCP tool implementations needed
+## Pipeline Output Artifacts
 
-### Test Database Setup
+### Planner Output
+- `progress/documentation-plan.json` - Work units and table specs
 
-- **DABstep-postgres**: PostgreSQL test database available
-  - Location: `DABstep-postgres/`
-  - Contains payment processing data
-  - Docker Compose setup available
-  - Ready for testing
+### Documenter Output
+- `docs/{work_unit}/tables/*.md` - Markdown documentation
+- `docs/{work_unit}/tables/*.json` - JSON documentation
+- `docs/documentation-manifest.json` - Manifest for indexer
+- `progress/documenter-progress.json` - Checkpoint file
+
+### Indexer Output
+- `data/tribal-knowledge.db` - SQLite database with:
+  - `documents` - Metadata and content
+  - `documents_fts` - FTS5 full-text search
+  - `documents_vec` - Vector embeddings (vec0 virtual table with `document_id` column, or blob fallback)
+  - `relationships` - FK and join paths
+  - `keywords` - Extracted terms
+  - `index_weights` - Search scoring config
+  - `index_metadata` - Provenance info
+
+## Implementation Status
+
+| Agent | Status | Location |
+|-------|--------|----------|
+| **Planner** | ✅ Complete | `src/agents/planner/` |
+| **Documenter** | ✅ Complete | `src/agents/documenter/` |
+| **Indexer** | ✅ Complete | `src/agents/indexer/` |
+| **Retriever** | ⏳ Pending | `src/agents/retrieval/` |
 
 ## Next Steps
 
-### Immediate Next Steps (Complete Remaining Agent)
+### Immediate: Retriever/MCP Server
+1. Implement MCP tool handlers
+2. Complete hybrid search integration (FTS5 + vector + RRF)
+3. Add context budgeting and compression
+4. Expose search tools via MCP protocol
 
-1. **Retriever/MCP Server Implementation**
-   - Implement MCP tool handlers
-   - Complete hybrid search integration
-   - Add context budgeting and compression
-   - Expose search tools via MCP protocol
-   - CLI command: `npm run serve`
+### Testing
+- End-to-end pipeline testing
+- Search quality validation
+- Performance benchmarking
 
-3. **End-to-End Testing**
-   - Test full pipeline: Plan → Document → Index → Retrieve
-   - Integration tests with test database
-   - Performance benchmarking
-   - Search quality validation
+## Architecture Decisions
 
-### Current Goals
+1. **Deep Agent Pattern**: Planning, sub-agents, filesystem memory, configurable prompts
+2. **Storage**: Filesystem (human-readable) + SQLite (machine-searchable)
+3. **Search**: Hybrid approach (FTS5 + vector + RRF fusion)
+4. **Parallelization**: Batched processing (3 tables, 5 columns concurrently)
+5. **Vector Storage**: sqlite-vec preferred, blob fallback available
 
-- Complete Retriever to enable search functionality
-- Achieve end-to-end pipeline working (Planner → Documenter → Indexer → Retriever)
-- Update Documenter README to reflect full implementation status
+## Active Files
 
-## Active Decisions and Considerations
+### Implementation
+- `TribalAgent/src/agents/planner/` - Planner ✅
+- `TribalAgent/src/agents/documenter/` - Documenter ✅
+- `TribalAgent/src/agents/indexer/` - Indexer ✅
+- `TribalAgent/src/agents/retrieval/` - Retriever (pending)
 
-### Architecture Decisions Made
-
-1. **Deep Agent Pattern**: Confirmed use of planning, sub-agents, filesystem memory, configurable prompts
-2. **Storage**: Filesystem + SQLite (human-readable + machine-searchable)
-3. **Search**: Hybrid approach (FTS5 + vector + RRF)
-4. **Sub-agents**: TableDocumenter and ColumnInferencer pattern confirmed
-5. **Domain-Based Parallelization**: Work units grouped by business domain
-
-### Open Questions
-
-1. **Documenter Implementation**: What's the priority order for remaining features?
-   - Sub-agents exist, need main documenter orchestration
-
-2. **MCP Integration**: How to integrate with Noah's Company MCP?
-   - Retrieval logic exists, need MCP protocol implementation
-
-3. **Testing**: Expand test coverage?
-   - Unit tests exist for Planner and Indexer
-   - Need integration tests for full pipeline
-
-### Current Blockers
-
-- Retriever/MCP server needed to enable search functionality
-
-## Active Files and Locations
-
-### Planning Documents
-- `PlanningDocs/tribal-knowledge-prd1-product.md`
-- `PlanningDocs/tribal-knowledge-prd2-technical.md`
-- `PlanningDocs/tribal-knowledge-plan.md`
-- `PlanningDocs/agent-contracts-summary.md`
-- `PlanningDocs/agent-contracts-interfaces.md`
-- `PlanningDocs/agent-contracts-execution.md`
-- `PlanningDocs/orchestrator-plan.md`
+### Configuration
+- `TribalAgent/package.json` - npm scripts and dependencies
+- `TribalAgent/.gitignore` - Excludes data/, docs/, sqlite-vec/
 
 ### Test Resources
 - `DABstep-postgres/` - PostgreSQL test database
-- `DABstep-postgres/docker-compose.yml` - Database setup
-- `DABstep-postgres/data/` - Sample data files
-
-### Implementation Code
-- `TribalAgent/src/agents/planner/` - Planner implementation ✅
-- `TribalAgent/src/agents/documenter/` - Documenter implementation ✅ (fully complete)
-- `TribalAgent/src/agents/indexer/` - Indexer implementation ✅
-- `TribalAgent/src/agents/retrieval/` - Retrieval skeleton (hybrid search exists, MCP tools pending)
-- `TribalAgent/src/connectors/` - Database connectors ✅
-- `TribalAgent/src/contracts/` - Type definitions and validators ✅
-- `TribalAgent/src/utils/` - Shared utilities ✅
-- `TribalAgent/src/cli/` - CLI commands ✅
-
-### Research Documents
-- `thoughts/shared/plans/indexer-agent-plan.md`
-- `thoughts/shared/research/2025-12-10-planner-schema-analyzer-implementation-plan.md`
-
-## Implementation Phases
-
-### Phase 1: Foundation (Week 1-2) - ✅ COMPLETE
-- [x] TypeScript project setup ✅
-- [x] PostgreSQL connector ✅
-- [x] Basic metadata extraction ✅
-- [x] Simple Markdown generation ✅
-- [x] SQLite + FTS5 setup ✅
-- [ ] Basic search_tables tool (Retriever pending)
-- [x] Initial prompt templates ✅
-
-### Phase 2: Semantic Layer (Week 3-4) - ✅ MOSTLY COMPLETE
-- [x] OpenAI embeddings integration ✅
-- [x] sqlite-vec setup ✅
-- [ ] Hybrid search implementation (Retriever pending)
-- [x] LLM semantic inference ✅
-- [x] Schema Analyzer (Planner) ✅
-- [x] Domain detection ✅
-- [ ] Complete MCP tools (Retriever pending)
-
-### Phase 3: Snowflake & Scale (Week 5-6) - NOT STARTED
-- [ ] Snowflake connector
-- [ ] Multi-database support
-- [ ] Mermaid ER diagrams
-- [ ] JSON Schema output
-- [ ] YAML semantic models
-- [ ] Sub-agent implementation
-- [ ] Progress tracking
-
-### Phase 4: MCP Integration & Polish (Week 7-8) - NOT STARTED
-- [ ] Noah's Company MCP integration
-- [ ] Context budgeting
-- [ ] Response compression
-- [ ] Documentation
-- [ ] Performance optimization
-- [ ] Error handling
-- [ ] Integration testing
-
-## Key Metrics to Track
-
-Once implementation begins:
-- Planning time for 100 tables
-- Documentation time for 100 tables
-- Indexing time for 100 tables
-- Search query latency (p50, p95)
-- Search relevance (top-3 hit rate)
-- Join path accuracy
-- LLM token usage
-- API costs
-
-## Notes
-
-- All planning documents are comprehensive and ready for implementation
-- Test database is available and ready
-- Architecture is well-defined with clear contracts
-- Deep agent patterns are clearly specified
-- Ready to begin Phase 1 implementation
+- Snowflake connection configured in .env

@@ -2,259 +2,143 @@
 
 ## What Works
 
-### Planning & Design ✅
-- **Product Requirements Document (PRD1)**: Complete
-  - User stories defined
-  - Functional requirements specified
-  - Success criteria established
-  - Non-functional requirements documented
+### Full Pipeline ✅
+The complete documentation pipeline is operational:
+```
+Plan → Document → Index
+```
 
-- **Technical Specification (PRD2)**: Complete
-  - System architecture defined
-  - Database schema specified
-  - MCP tool specifications complete
-  - Integration details documented
-  - Prompt template system designed
+Run with: `npx dotenv-cli npm run pipeline`
 
-- **Project Plan**: Complete
-  - 4-phase implementation plan
-  - Deep agent properties defined
-  - Success metrics established
-  - Timeline estimated
+### Planner (Schema Analyzer) ✅
+- **Location**: `TribalAgent/src/agents/planner/`
+- **CLI**: `npm run plan`
+- **Output**: `progress/documentation-plan.json`
+- **Features**:
+  - Database connection and metadata extraction
+  - LLM-powered domain inference
+  - WorkUnit-based output for parallel documentation
+  - Content hashes for change detection
+  - Summary statistics with recommended parallelism
 
-- **Agent Contracts**: Complete
-  - TypeScript interfaces defined
-  - Execution model documented
-  - Contract handoffs specified
-  - Error handling patterns defined
+### Documenter ✅
+- **Location**: `TribalAgent/src/agents/documenter/`
+- **CLI**: `npm run document`, `npm run document:fresh`
+- **Output**: `docs/` folder with Markdown and JSON files
+- **Features**:
+  - Parallel table processing (batch size: 3)
+  - Parallel column inference (batch size: 5)
+  - TableDocumenter and ColumnInferencer sub-agents
+  - LLM-powered semantic descriptions
+  - Checkpoint recovery
+  - Documentation manifest generation
+  - Progress tracking
 
-- **Orchestrator Plan**: Complete
-  - Coordination layer designed
-  - Smart detection logic specified
-  - Interactive workflow defined
+### Indexer ✅
+- **Location**: `TribalAgent/src/agents/indexer/`
+- **CLI**: `npm run index`, `npm run index:fresh`, `npm run index:migrate-vec0`
+- **Output**: `data/tribal-knowledge.db`
+- **Features**:
+  - sqlite-vec native vector operations (vec0 virtual table with `document_id` column)
+  - Blob fallback when extension unavailable
+  - FTS5 full-text search with Porter stemming
+  - OpenAI embeddings (text-embedding-3-small)
+  - Document splitting for large texts (8k token limit guard)
+  - Keyword extraction
+  - Relationship/join path indexing (with enhanced FK extraction patterns)
+  - Embedding lookup by both file path and document identity
+  - Incremental re-indexing support
+  - Checkpoint/resume support
+  - Migration script for converting blob-based vec tables to vec0
 
-### Infrastructure ✅
-- **Test Database**: Available
-  - DABstep-postgres PostgreSQL database
-  - Docker Compose setup
-  - Sample data loaded
-  - Ready for testing
+### Database Schema
+```
+tribal-knowledge.db (SQLite)
+├── documents        ← metadata, content, file paths
+├── documents_fts    ← FTS5 Porter-stemmed text index
+├── documents_vec    ← vector embeddings (1536-dim, uses document_id column)
+├── relationships    ← FK relationships, join paths
+├── keywords         ← extracted terms + frequencies
+├── index_weights    ← search scoring config
+└── index_metadata   ← provenance info
+```
 
-### Implementation ✅
-- **Project Structure**: Complete
-  - TypeScript project initialized (`TribalAgent/`)
-  - Package.json with all dependencies
-  - Directory structure created
-  - TypeScript compilation configured
-  - Build system working (`npm run build`)
+**Important Schema Note**: The `documents_vec` table uses `document_id` (not `id`) as the primary key column to match expected schema for test compatibility. This applies to both vec0 virtual table and blob fallback implementations.
 
-- **Planner (Schema Analyzer)**: ✅ IMPLEMENTED & BUILT
-  - Location: `TribalAgent/src/agents/planner/`
-  - Key files:
-    - `index.ts` - Main planner entry point
-    - `analyze-database.ts` - Database analysis logic
-    - `domain-inference.ts` - LLM-powered domain detection
-    - `generate-work-units.ts` - Work unit generation for parallelization
-    - `metrics.ts` - Metrics collection
-    - `staleness.ts` - Change detection and staleness checking
-  - Features implemented:
-    - Database connection and metadata extraction
-    - LLM-powered domain inference using `domain-inference.md` prompt
-    - WorkUnit-based output format for parallel documentation
-    - Content hashes for change detection
-    - Structured error handling with AgentError format
-    - Summary statistics with recommended parallelism
-    - Plan validation and staleness detection
-  - Build status: ✅ Successfully compiled to `dist/agents/planner/`
-  - CLI: `npm run plan` command available
-  - Output: Generates `progress/documentation-plan.json`
-
-- **Indexer Agent**: ✅ IMPLEMENTED & BUILT
-  - Location: `TribalAgent/src/agents/indexer/`
-  - Key files:
-    - `index.ts` - Main indexer entry point
-    - `embeddings.ts` - OpenAI embeddings generation
-    - `keywords.ts` - Keyword extraction
-    - `populate.ts` - Database population logic
-    - `relationships.ts` - Join path computation
-    - `parsers/` - Document parsing (markdown, columns, documents)
-    - `database/init.ts` - SQLite initialization
-    - `incremental.ts` - Incremental re-indexing support
-    - `optimize.ts` - Database optimization
-    - `progress.ts` - Checkpoint and resume support
-  - Features implemented:
-    - Manifest validation and file parsing
-    - Column document generation from table docs
-    - Keyword extraction (abbreviations, patterns, nouns)
-    - OpenAI embeddings batch generation with fallback
-    - SQLite database population (documents, FTS5, vectors)
-    - Relationship/join path indexing
-    - Incremental re-indexing with change detection
-    - Checkpoint/resume support
-    - Parent-child linkage (columns → tables)
-  - Build status: ✅ Successfully compiled to `dist/agents/indexer/`
-  - CLI: `npm run index` command available
-  - Output: Populates `data/tribal-knowledge.db`
-
-- **Supporting Infrastructure**: ✅ IMPLEMENTED
-  - Database connectors: PostgreSQL and Snowflake (`src/connectors/`)
-  - Contract types and validators (`src/contracts/`)
-  - LLM utilities (`src/utils/llm.ts`)
-  - Prompt template system (`src/utils/prompts.ts`)
-  - Configuration management (`src/config/`)
-  - Logging system (`src/utils/logger.ts`)
-  - Hash utilities (`src/utils/hash.ts`)
-  - Plan I/O utilities (`src/utils/plan-io.ts`)
-  - CLI commands (`src/cli/`)
+### Supporting Infrastructure ✅
+- Database connectors: PostgreSQL and Snowflake
+- LLM utilities with retry and fallback
+- Prompt template system
+- Configuration management
+- Logging system
+- CLI commands
 
 ## What's Left to Build
 
-### Phase 1: Foundation (COMPLETE ✅)
-- [x] TypeScript project initialization ✅
-- [x] Package.json with dependencies ✅
-- [x] Directory structure creation ✅
-- [x] PostgreSQL database connector ✅
-- [x] Basic metadata extraction (tables, columns, keys) ✅
-- [x] Simple Markdown documentation generation ✅
-- [x] SQLite database setup ✅
-- [x] FTS5 full-text search index ✅
-- [ ] Basic `search_tables` MCP tool (Retrieval agent not yet implemented)
-- [x] Progress tracking file structure ✅
-- [x] Initial prompt templates (column, table) ✅
+### Retriever/MCP Server ⏳
+- **Location**: `TribalAgent/src/agents/retrieval/`
+- **Status**: Hybrid search logic exists, MCP tools pending
+- **Needed**:
+  - [ ] MCP tool handlers (search_tables, get_table_schema, get_join_path)
+  - [ ] Hybrid search integration (FTS5 + vector + RRF)
+  - [ ] Context budgeting and compression
+  - [ ] MCP protocol server
 
-**Status**: Foundation infrastructure complete. Planner, Documenter, and Indexer built. Retriever pending.
+### End-to-End Testing
+- [ ] Full pipeline integration tests
+- [ ] Search quality validation
+- [ ] Performance benchmarking
 
-### Phase 2: Semantic Layer (MOSTLY COMPLETE ✅)
-- [x] OpenAI embeddings API integration ✅
-- [x] sqlite-vec vector storage setup ✅
-- [ ] Hybrid search implementation (FTS5 + vector) - Retrieval agent pending
-- [ ] Reciprocal Rank Fusion (RRF) algorithm - Retrieval agent pending
-- [x] LLM-based semantic inference for columns ✅
-- [x] LLM-based semantic inference for tables ✅
-- [x] Schema Analyzer (Planner) implementation ✅
-- [x] documentation-plan.json generation ✅
-- [x] Automatic domain detection ✅
-- [x] Keyword extraction from column names ✅
-- [x] Keyword extraction from sample data ✅
-- [ ] Complete MCP tools (get_table_schema, get_join_path, etc.) - Retrieval agent pending
-- [x] domain-inference.md prompt template ✅
-
-**Status**: Planner, Documenter, and Indexer complete with semantic capabilities. Retriever needed for search functionality.
-
-### Phase 3: Snowflake & Scale (NOT STARTED)
-- [ ] Snowflake database connector
-- [ ] Cross-database documentation support
+### Phase 3: Snowflake & Scale (Future)
 - [ ] Mermaid ER diagram generation
-- [ ] Domain-grouped ER diagrams
-- [ ] Full-schema ER diagram (simplified)
-- [ ] JSON Schema file generation
-- [ ] YAML semantic model file generation
-- [ ] TableDocumenter sub-agent implementation
-- [ ] ColumnInferencer sub-agent implementation
-- [ ] Robust progress tracking
-- [ ] Checkpoint recovery system
-- [ ] Work unit parallelization
+- [ ] JSON Schema output
+- [ ] YAML semantic models
 
-**Deliverable**: Full documentation of Postgres + Snowflake with ER diagrams
-
-### Phase 4: MCP Integration & Polish (NOT STARTED)
-- [ ] Install tools into Noah's Company MCP repository
-- [ ] Adaptive context budgeting
-- [ ] Response compression to fit token limits
-- [ ] query-understanding.md prompt template
-- [ ] Comprehensive documentation
-- [ ] Usage examples
-- [ ] Performance optimization
-- [ ] Caching implementation
-- [ ] Error handling and retry logic
-- [ ] Graceful degradation
-- [ ] End-to-end integration testing
-- [ ] Search quality testing
-- [ ] Performance testing
-
-**Deliverable**: Production-ready Tribal Knowledge Deep Agent
+### Phase 4: MCP Integration (Future)
+- [ ] Noah's Company MCP integration
+- [ ] Production deployment documentation
 
 ## Current Status
 
-**Overall Status**: Planning Complete, Implementation In Progress
+**Overall**: ~80% Complete
 
-**Phase**: Implementation Phase 2 (Semantic Layer) - Mostly Complete
-
-**Completion**: ~75% (Planning: 100%, Implementation: ~75%)
-- ✅ Planner (Schema Analyzer): Complete
-- ✅ Documenter: Complete
-- ✅ Indexer: Complete
-- ⏳ Retriever (MCP Server): Not yet implemented
-
-**Codebase Location**: `TribalAgent/` directory
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Planning Documents | ✅ 100% | PRD, Technical Spec, Contracts |
+| Planner Agent | ✅ 100% | Working |
+| Documenter Agent | ✅ 100% | Parallelized, working |
+| Indexer Agent | ✅ 100% | sqlite-vec enabled |
+| Retriever Agent | ⏳ 20% | Search logic exists, MCP pending |
+| Testing | ⏳ 40% | Unit tests exist, integration pending |
 
 ## Known Issues
 
-### Planning Phase Issues
-- None identified - planning documents are comprehensive
+### Resolved ✅
+- ~~Documenter output schema didn't match Indexer expectations~~ → Fixed
+- ~~Embedding token limit errors on large documents~~ → Document splitting implemented with enhanced 8k token guard
+- ~~sqlite-vec extension not loading~~ → Added platform-specific paths and additional system paths
+- ~~Embeddings key mismatch bug~~ → Fixed: Embeddings now use consistent identity format and dual-key lookup (filePath + document identity)
+- ~~FK relationship extraction not matching documenter format~~ → Fixed: Added Unicode arrow `→` pattern matching
+- ~~Snowflake SDK verbose logging~~ → Fixed: Configured log level to WARN
+- ~~documents_vec schema mismatch~~ → Fixed: Changed column from `id` to `document_id` throughout codebase for test compatibility
+- ~~vec0 embedding format error~~ → Fixed: vec0 requires JSON array format, not BLOB. Code now detects vec0 availability and inserts/reads accordingly
 
-### Implementation Issues
-- Retriever/MCP server not yet implemented (blocks search functionality)
-- End-to-end testing pending (Planner → Documenter → Indexer → Retriever)
-- Documenter README is outdated (claims Phase 1 only, but implementation is complete)
+### Open
+- Retriever/MCP server not yet implemented
+- End-to-end integration tests pending
 
-### Technical Debt
-- Tests exist for Planner and Indexer but full integration test suite pending
-- Documentation could be expanded with usage examples
+## Success Metrics
 
-## Blockers
-
-- None - ready to begin implementation
-
-## Next Milestones
-
-1. **Milestone 1**: Complete Phase 1 Foundation
-   - Target: End-to-end flow with single PostgreSQL database
-   - Can document and search tables
-
-2. **Milestone 2**: Complete Phase 2 Semantic Layer
-   - Target: Natural language search working
-   - Semantic descriptions generated
-
-3. **Milestone 3**: Complete Phase 3 Snowflake & Scale
-   - Target: Multi-database support
-   - ER diagrams and visual documentation
-
-4. **Milestone 4**: Complete Phase 4 MCP Integration
-   - Target: Production-ready system
-   - Integrated with Noah's Company MCP
-
-## Success Metrics Status
-
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| Documentation coverage | 100% of tables | N/A (not started) |
-| Search relevance (top-3 hit) | >85% | N/A (not started) |
-| Join path accuracy | >95% | N/A (not started) |
-| Search latency (p95) | <500ms | N/A (not started) |
-| Documentation time (100 tables) | <5 minutes | N/A (not started) |
-| Semantic description quality | >90% sensible | N/A (not started) |
-
-## Implementation Readiness
-
-### Ready ✅
-- Planning documents complete
-- Architecture defined
-- Contracts specified
-- Test database available
-- Requirements clear
-
-### Not Ready ❌
-- Documenter agent implementation
-- Retriever/MCP server implementation
-- End-to-end integration tests
-- Production deployment documentation
+| Metric | Target | Current |
+|--------|--------|---------|
+| Documentation coverage | 100% tables | ✅ 41/41 tables documented |
+| Indexing coverage | 100% docs | ✅ 82 files indexed |
+| Pipeline runtime | <5 min/100 tables | ~3 min for 41 tables |
+| sqlite-vec enabled | Yes | ✅ Yes |
 
 ## Notes
 
-- All planning is complete and comprehensive
-- Ready to begin Phase 1 implementation
-- Test database (DABstep-postgres) is available for development
-- Architecture is well-defined with clear separation of concerns
-- Deep agent patterns are clearly specified
-- No blockers identified
+- Full pipeline tested successfully with PostgreSQL (41 tables) and Snowflake (4 tables)
+- sqlite-vec requires manual build on macOS (see `build-sqlite-vec.sh`)
+- All agents support checkpoint recovery for interrupted runs
+- Parallelization significantly improved documenter performance

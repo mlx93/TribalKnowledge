@@ -77,6 +77,10 @@ Planner (Schema Analyzer)
 - Incremental re-indexing via content hash comparison
 - Hybrid search preparation (FTS5 + vectors)
 - Batch embedding generation
+- **Embedding key consistency**: Embeddings stored with document identity keys (`db.schema.table`), looked up by both file path and identity
+- **FK extraction**: Regex patterns match Unicode arrow format from TableDocumenter (`` `col` → `table.col` ``)
+- **Schema alignment**: `documents_vec` uses `document_id` column (not `id`) for test compatibility
+- **Token limit guards**: Enhanced 8k token limit handling with conservative character-per-token estimates
 
 ### 4. Retriever (Agent 3) - MCP Server
 
@@ -161,10 +165,12 @@ Planner (Schema Analyzer)
 tribal-knowledge.db
 ├── documents (id, type, content, metadata)
 ├── documents_fts (FTS5 virtual table)
-├── documents_vec (vector embeddings)
+├── documents_vec (vector embeddings, uses document_id column)
 ├── relationships (join paths)
 └── keywords (extracted terms)
 ```
+
+**Schema Note**: `documents_vec` uses `document_id` (not `id`) as the primary key column for test compatibility.
 
 ## Design Patterns
 

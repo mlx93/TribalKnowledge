@@ -10,7 +10,7 @@
 | Language | TypeScript | 5.x | Type safety, maintainability |
 | Database | SQLite | 3.x | Local persistent storage |
 | Full-Text Search | FTS5 | (SQLite built-in) | Keyword search |
-| Vector Search | sqlite-vec | 0.1.x | Embedding similarity |
+| Vector Search | sqlite-vec | 0.1.x | Embedding similarity (native vec0) |
 | MCP SDK | @modelcontextprotocol/sdk | Latest | Tool server implementation |
 
 ### External Services
@@ -29,6 +29,7 @@
 | pg | PostgreSQL connection and queries |
 | snowflake-sdk | Snowflake connection and queries |
 | better-sqlite3 | SQLite database driver |
+| sqlite-vec | Vector operations extension (native) |
 | openai | OpenAI API client for embeddings |
 | @anthropic-ai/sdk | Claude API for semantic inference |
 | js-yaml | YAML parsing and generation |
@@ -44,291 +45,242 @@
 - Access to PostgreSQL and/or Snowflake databases
 - OpenAI API key
 - Anthropic API key
+- sqlite-vec extension (optional, blob fallback available)
+
+### sqlite-vec Installation (macOS)
+
+```bash
+# Clone and build
+git clone https://github.com/asg017/sqlite-vec.git
+cd sqlite-vec
+make loadable
+
+# Copy to project (or system path)
+mkdir -p /path/to/TribalAgent/node_modules/sqlite-vec/dist
+cp dist/vec0.dylib /path/to/TribalAgent/node_modules/sqlite-vec/dist/
+```
+
+Or use the helper script: `./build-sqlite-vec.sh`
+
+The indexer searches these paths for the extension:
+- `node_modules/sqlite-vec-darwin-arm64/vec0`
+- `node_modules/sqlite-vec-darwin-x64/vec0`
+- `node_modules/sqlite-vec/dist/vec0`
+- `sqlite-vec/dist/vec0`
+- `/usr/local/lib/sqlite-vec/vec0`
 
 ### Project Structure
 
-**Actual Implementation Location**: `TribalAgent/` directory
+**Location**: `TribalAgent/` directory
 
 ```
 TribalAgent/
 ├── src/
 │   ├── agents/
-│   │   ├── planner/             # ✅ Schema Analyzer (IMPLEMENTED)
-│   │   │   ├── index.ts
-│   │   │   ├── analyze-database.ts
-│   │   │   ├── domain-inference.ts
-│   │   │   ├── generate-work-units.ts
-│   │   │   ├── metrics.ts
-│   │   │   └── staleness.ts
-│   │   ├── indexer/             # ✅ Agent 2 (IMPLEMENTED)
-│   │   │   ├── index.ts
-│   │   │   ├── embeddings.ts
-│   │   │   ├── keywords.ts
-│   │   │   ├── populate.ts
-│   │   │   ├── relationships.ts
-│   │   │   ├── parsers/
-│   │   │   └── database/
-│   │   ├── documenter/          # ⏳ Agent 1 (PENDING - sub-agents exist)
+│   │   ├── planner/             # ✅ Schema Analyzer (COMPLETE)
+│   │   ├── documenter/          # ✅ Documentation Generator (COMPLETE)
 │   │   │   ├── sub-agents/
 │   │   │   │   ├── TableDocumenter.ts
 │   │   │   │   └── ColumnInferencer.ts
-│   │   └── retrieval/           # ⏳ Agent 3 (PENDING - hybrid search exists)
+│   │   ├── indexer/             # ✅ Search Index Builder (COMPLETE)
+│   │   │   ├── database/
+│   │   │   │   └── init.ts      # SQLite + sqlite-vec setup
+│   │   │   ├── embeddings.ts
+│   │   │   ├── parsers/
+│   │   └── retrieval/           # ⏳ MCP Server (PENDING)
 │   │       └── search/
 │   │           └── hybrid-search.ts
-│   ├── connectors/              # ✅ Database connectors (IMPLEMENTED)
-│   │   ├── postgres.ts
-│   │   └── snowflake.ts
-│   ├── contracts/               # ✅ Type definitions (IMPLEMENTED)
-│   ├── utils/                   # ✅ Shared utilities (IMPLEMENTED)
-│   ├── config/                  # ✅ Configuration (IMPLEMENTED)
-│   └── cli/                     # ✅ CLI commands (IMPLEMENTED)
-├── config/
-│   ├── databases.yaml           # Database catalog
-│   └── agent-config.yaml        # Agent configuration
-├── prompts/                     # ✅ Prompt templates (IMPLEMENTED)
-│   ├── column-description.md
-│   ├── table-description.md
-│   ├── domain-inference.md
-│   └── query-understanding.md
-├── dist/                        # ✅ Compiled TypeScript output
-├── tests/                       # ✅ Test files (Planner & Indexer)
-├── package.json                 # ✅ Dependencies configured
-└── tsconfig.json                # ✅ TypeScript config
+│   ├── connectors/              # ✅ Database connectors
+│   ├── contracts/               # ✅ Type definitions
+│   ├── utils/                   # ✅ Shared utilities
+│   ├── config/                  # ✅ Configuration
+│   └── cli/                     # ✅ CLI commands
+├── prompts/                     # ✅ Prompt templates
+├── data/                        # Output: tribal-knowledge.db
+├── docs/                        # Output: Generated documentation
+├── progress/                    # Output: Plan and checkpoints
+├── dist/                        # Compiled TypeScript
+└── tests/                       # Test files
 ```
 
 ### Environment Variables
 
-**Required**:
+**Required** (in `.env` file):
 - `OPENAI_API_KEY` - OpenAI API key for embeddings
 - `ANTHROPIC_API_KEY` - Anthropic API key for inference
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DATABASE`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+- `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USERNAME`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_REGION`
+
+**Note**: Database credentials are stored in `.env` and referenced in `config/databases.yaml` using `${VAR_NAME}` syntax. The Planner and Documenter both support environment variable substitution via `substituteEnvVars()` functions.
 
 **Optional**:
 - `TRIBAL_DOCS_PATH` - Documentation output directory (default: `./docs`)
 - `TRIBAL_DB_PATH` - SQLite database path (default: `./data/tribal-knowledge.db`)
-- `TRIBAL_PROMPTS_PATH` - Prompt templates directory (default: `./prompts`)
 - `TRIBAL_LOG_LEVEL` - Logging verbosity (default: `info`)
 
-### Configuration Files
+## CLI Commands
 
-**databases.yaml** (Catalog Configuration):
-```yaml
-databases:
-  - name: production_postgres
-    type: postgres
-    connection_env: POSTGRES_CONNECTION_STRING
-    schemas: [public, analytics]
-    exclude_tables: [temp_*, _old_*]
-```
+Run from `TribalAgent/` with `npx dotenv-cli` prefix:
 
-**agent-config.yaml** (Agent Behavior):
-```yaml
-planner:
-  enabled: true
-  domain_inference: true
-documenter:
-  concurrency: 5
-  sample_timeout_ms: 5000
-  llm_model: claude-sonnet-4
-  checkpoint_interval: 10
-indexer:
-  batch_size: 50
-  embedding_model: text-embedding-3-small
-  checkpoint_interval: 100
-retrieval:
-  default_limit: 5
-  max_limit: 20
-  context_budgets:
-    simple: 750
-    moderate: 1500
-    complex: 3000
-  rrf_k: 60
-  use_query_understanding: false
+### Pipeline Commands
+| Command | Description |
+|---------|-------------|
+| `npm run pipeline` | Full pipeline: plan → document → index |
+| `npm run pipeline:fresh` | Clear all caches, then full pipeline |
+
+### Individual Agents
+| Command | Description |
+|---------|-------------|
+| `npm run plan` | Generate documentation plan |
+| `npm run plan:validate` | Validate an existing plan |
+| `npm run document` | Generate documentation (uses cache) |
+| `npm run document:clean` | Clear docs/ and progress |
+| `npm run document:fresh` | Clear + regenerate docs |
+| `npm run index` | Build search index |
+| `npm run index:clean` | Delete knowledge.db |
+| `npm run index:fresh` | Delete + rebuild index |
+
+### Utilities
+| Command | Description |
+|---------|-------------|
+| `npm run status` | Show pipeline status |
+| `npm run validate-prompts` | Validate prompt templates |
+| `npm run build` | Compile TypeScript |
+| `npm run test` | Run all tests |
+
+## Database Schema
+
+### SQLite Database: data/tribal-knowledge.db
+
+```sql
+-- Main document storage
+CREATE TABLE documents (
+  id INTEGER PRIMARY KEY,
+  doc_type TEXT,           -- 'table', 'column', 'relationship', 'domain'
+  database_name TEXT,
+  schema_name TEXT,
+  table_name TEXT,
+  column_name TEXT,
+  domain TEXT,
+  content TEXT,            -- Full markdown
+  summary TEXT,            -- Compressed for retrieval
+  keywords TEXT,           -- JSON array
+  file_path TEXT UNIQUE,
+  content_hash TEXT,
+  indexed_at DATETIME,
+  parent_doc_id INTEGER
+);
+
+-- FTS5 full-text search
+CREATE VIRTUAL TABLE documents_fts USING fts5(
+  content, summary, keywords,
+  content=documents,
+  tokenize='porter unicode61'
+);
+
+-- Vector embeddings (sqlite-vec)
+-- NOTE: Uses document_id (not id) to match expected schema for test compatibility
+CREATE VIRTUAL TABLE documents_vec USING vec0(
+  document_id INTEGER PRIMARY KEY,
+  embedding float[1536]
+);
+
+-- Or blob fallback if sqlite-vec unavailable:
+CREATE TABLE documents_vec (
+  document_id INTEGER PRIMARY KEY,
+  embedding BLOB NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+-- Relationships and join paths
+CREATE TABLE relationships (
+  source_table TEXT,
+  target_table TEXT,
+  join_sql TEXT,
+  confidence REAL,
+  hop_count INTEGER
+);
 ```
 
 ## Technical Constraints
 
-### Database Access
-- Requires read access to metadata (information_schema)
-- Requires SELECT on target tables (for sampling)
-- Connection via environment variables (never hardcoded)
-
-### API Constraints
-- OpenAI embeddings: Batch size 50, rate limits apply
-- Claude API: Token limits, rate limits
-- Exponential backoff on 429 errors
-
-### Storage Constraints
-- Local filesystem for documentation
-- SQLite database size limits (practical: ~100GB)
-- Vector dimensions: 1536 (OpenAI text-embedding-3-small)
-
-### Performance Constraints
+### Performance Targets
 - Planning: < 30 seconds for 100 tables
-- Documentation: < 5 minutes for 100 tables
-- Indexing: < 2 minutes for 100 tables
+- Documentation: ~3 minutes for 41 tables (parallelized)
+- Indexing: < 2 minutes for 100 documents
 - Search: < 500ms p95 latency
 
-## Dependencies
+### API Constraints
+- OpenAI embeddings: 8192 token limit per request, rate limits apply
+  - Conservative limit: 7500 tokens per document (~30,000 chars at 4 chars/token)
+  - Automatic splitting with chunk averaging for oversized documents
+  - Enhanced error handling for context window exceeded errors
+- Claude API: Token limits, rate limits
+- Document splitting for texts > 30,000 characters (conservative estimate)
 
-### Production Dependencies
-- Node.js 20 LTS
-- TypeScript 5.x
-- SQLite 3.x (via better-sqlite3)
-- PostgreSQL client (pg)
-- Snowflake SDK
-- OpenAI SDK
-- Anthropic SDK
-- MCP SDK
-- YAML parser (js-yaml)
-- Validation (zod)
-- CLI framework (commander)
+### Parallelization
+- Table processing: Batch size 3
+- Column inference: Batch size 5
+- Max theoretical concurrent LLM calls: 15
 
-### Development Dependencies
-- TypeScript compiler
-- Testing framework (TBD)
-- Linting (ESLint)
-- Formatting (Prettier)
-
-## Database Schema Details
-
-### SQLite Database: tribal-knowledge.db
-
-**documents table**:
-- Stores all indexed documentation
-- Types: table, column, relationship, domain
-- Includes content, summary, keywords, metadata
-
-**documents_fts** (FTS5 virtual table):
-- Full-text search index
-- Tokenizer: porter (stemming)
-- Indexed: content, summary, keywords
-
-**documents_vec** (sqlite-vec):
-- Vector embeddings (1536 dimensions)
-- Cosine similarity distance
-- Linked to documents.id
-
-**relationships table**:
-- Pre-computed join paths
-- Includes SQL snippets
-- Confidence scores
+### Storage
+- Vector dimensions: 1536 (OpenAI text-embedding-3-small)
+- sqlite-vec with native vec0 for fast similarity search
+- Blob fallback for compatibility (slower but functional)
 
 ## Integration Details
 
-### PostgreSQL Integration
-- Connection: Connection string format
-- Metadata queries: information_schema views
-- Sampling: TABLESAMPLE or ORDER BY RANDOM()
-- Permissions: SELECT on metadata and tables
+### PostgreSQL
+- Connection: Environment variables
+- Metadata: information_schema views
+- Sampling: SELECT * FROM table LIMIT 100
 
-### Snowflake Integration
-- Connection: Connection parameters object
-- Metadata queries: INFORMATION_SCHEMA views
-- Sampling: SAMPLE clause
-- Permissions: USAGE on database/schemas, SELECT on tables
+### Snowflake
+- Connection: snowflake-sdk with account/user/password
+- Metadata: INFORMATION_SCHEMA views
+- Column normalization: Uppercase names converted
+- Logging: Configured to WARN level to reduce verbosity (`snowflake.configure({ logLevel: 'WARN' })`)
 
-### OpenAI Integration
-- Endpoint: Embeddings API
-- Model: text-embedding-3-small (1536 dims)
-- Batch size: 50 documents
-- Rate limiting: Exponential backoff
+### OpenAI Embeddings
+- Model: text-embedding-3-small (1536 dimensions)
+- Token-aware batching: ~7000 tokens per batch
+- Document splitting: Large docs split at sentence boundaries (30,000 char limit)
+- Embedding averaging: Split chunks averaged back to single embedding
+- Error handling: Explicit guards for 8k token context window with detailed logging
+- Character-per-token estimate: Conservative 4 chars/token (was 3) for safety margin
+- **Storage format**: 
+  - vec0 virtual table: Embeddings stored as JSON arrays (`JSON.stringify(embedding)`)
+  - Blob fallback: Embeddings stored as BLOB (float32 array)
+  - Code automatically detects vec0 availability and uses appropriate format
 
-### Claude Integration
+### Claude Inference
 - Model: claude-sonnet-4
-- Use cases: Column/table descriptions, domain inference, query understanding
-- Prompt loading: Templates from /prompts directory
-
-### MCP Integration
-- Protocol: Model Context Protocol
-- Communication: stdio or HTTP
-- Tool registration: Export tool definitions
-- Integration point: Noah's Company MCP
-
-## Development Workflow
-
-### CLI Commands
-
-**Location**: Run commands from `TribalAgent/` directory
-
-| Command | Status | Description |
-|---------|--------|-------------|
-| `npm run build` | ✅ Working | Compile TypeScript to JavaScript |
-| `npm run plan` | ✅ Working | Run Schema Analyzer, generate documentation-plan.json |
-| `npm run plan:validate` | ✅ Working | Validate documentation plan |
-| `npm run document` | ⏳ Pending | Execute documentation using plan (Documenter not implemented) |
-| `npm run index` | ✅ Working | Index documentation into SQLite |
-| `npm run serve` | ⏳ Pending | Start MCP server (Retriever not implemented) |
-| `npm run pipeline` | ⏳ Partial | Run plan → document → index (document step pending) |
-| `npm run status` | ✅ Working | Show current progress |
-| `npm run validate-prompts` | ✅ Working | Validate prompt template syntax |
-| `npm test` | ✅ Working | Run unit tests (Vitest) |
-| `npm run test:integration` | ✅ Working | Run integration tests |
-
-### Development Process
-
-**Current State**: Planner and Indexer are implemented and working
-
-1. ✅ Clone repository, install dependencies (`cd TribalAgent && npm install`)
-2. ✅ Copy example config files, set environment variables
-3. ✅ Create or customize prompt templates in `prompts/`
-4. ✅ Run `npm run validate-prompts` to verify templates
-5. ✅ Run `npm run plan` to analyze target databases (WORKING)
-6. ✅ Review `progress/documentation-plan.json`
-7. ⏳ Run `npm run document` to generate docs (PENDING - Documenter not implemented)
-8. ✅ Run `npm run index` to build search index (WORKING - if docs exist)
-9. ⏳ Run `npm run serve` to start MCP server (PENDING - Retriever not implemented)
-10. ⏳ Test with MCP client (PENDING)
-
-**Note**: Full pipeline blocked until Documenter is implemented. Planner and Indexer are production-ready.
-
-## Testing Strategy
-
-### Unit Testing
-- Schema analysis logic
-- Metadata extraction
-- Semantic inference
-- Keyword extraction
-- Embedding generation
-- FTS5 indexing
-- Vector search
-- RRF ranking
-- Prompt loading
-
-### Integration Testing
-- End-to-end PostgreSQL flow
-- End-to-end Snowflake flow
-- Multi-database support
-- MCP integration
-- Large schema handling
-- Incremental updates
-- Prompt customization
-
-### Performance Testing
-- Planning speed (10/50/100/500 tables)
-- Documentation speed
-- Indexing speed
-- Search latency
-- Memory usage
-
-## Deployment Considerations
-
-### Current: Local Development
-- Single-user operation
-- Local filesystem storage
-- Manual triggers
-- Development-focused
-
-### Future Considerations
-- Cloud-hosted deployment
-- Multi-user concurrent access
-- Scheduled re-documentation
-- Schema change detection
-- Pinecone migration (from sqlite-vec)
+- Use cases: Column descriptions, table descriptions, domain inference
+- Retry with exponential backoff on failures
+- Fallback descriptions when LLM fails
 
 ## Known Technical Challenges
 
-1. **Large Schema Performance**: Chunked processing, sub-agent parallelism
-2. **API Cost Management**: Batch requests, cache results
-3. **MCP Integration Complexity**: Early integration testing required
-4. **Snowflake Connector**: Reference existing implementations
-5. **Vector Store Migration**: Abstraction layer for future Pinecone migration
+1. **sqlite-vec Installation**: Requires manual build on macOS (see `build-sqlite-vec.sh`)
+2. **Token Limits**: Large documents need splitting before embedding (8k limit enforced)
+3. **API Costs**: Batch requests, use checkpoints to avoid re-processing
+4. **Snowflake Column Names**: Uppercase normalization required
+5. **Schema Compatibility**: `documents_vec` uses `document_id` column (not `id`) for test compatibility - migration script available
+
+## Migration and Maintenance
+
+### Converting Existing Databases
+If you have an existing database with the old `id` column in `documents_vec`, use the migration script:
+```bash
+npm run index:migrate-vec0
+```
+This will:
+- Backup your database
+- Drop the old blob-based table
+- Create vec0 virtual table with `document_id` column
+- Require re-indexing to populate embeddings
+
+### Recent Schema Changes (December 11, 2025)
+- `documents_vec` column renamed: `id` → `document_id`
+- Affects: `init.ts`, `populate.ts`, `hybrid-search.ts`, `incremental.ts`, `optimize.ts`
+- Migration script: `scripts/migrate-vec-to-vec0.ts`
