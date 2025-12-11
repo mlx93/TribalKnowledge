@@ -15,10 +15,13 @@ The project has completed implementation of the core pipeline agents. The full p
   - Updated `hybrid-search.ts`: Join clause now uses `document_id`
   - Updated `incremental.ts` and `optimize.ts`: All queries updated to use `document_id`
   - Migration script created: `scripts/migrate-vec-to-vec0.ts` for converting existing databases
-- **vec0 embedding format fix**: Fixed critical bug where vec0 virtual table requires JSON array format, not BLOB
-  - Updated `populate.ts`: Now checks `isSqliteVecAvailable()` and inserts as JSON array for vec0, BLOB for fallback
+- **vec0 embedding format fix**: Fixed critical bug where vec0 virtual table requires direct SQL with vec_f32(), not parameterized queries
+  - **Root cause**: vec0's `float[1536]` column type doesn't support parameterized queries when using `vec_f32()` function
+  - **Solution**: Use direct SQL construction: `INSERT INTO documents_vec (document_id, embedding) VALUES (${docId}, vec_f32('${escapedJson}'))`
+  - Updated `populate.ts`: Converts embedding to JSON string, escapes single quotes, uses `db.exec()` with direct SQL
   - Updated `hybrid-search.ts`: Handles both JSON array (vec0) and BLOB (fallback) formats when reading embeddings
   - Added `cosineSimilarityArrays()` method to work directly with number arrays
+  - **Security**: JSON strings are escaped to prevent SQL injection (single quotes doubled)
 - **8k token limit guard**: Enhanced embedding generation with better error handling
   - More conservative character-per-token estimate (4 chars/token)
   - Better logging when documents exceed limits

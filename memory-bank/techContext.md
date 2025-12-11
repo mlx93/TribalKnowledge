@@ -249,8 +249,12 @@ CREATE TABLE relationships (
 - Error handling: Explicit guards for 8k token context window with detailed logging
 - Character-per-token estimate: Conservative 4 chars/token (was 3) for safety margin
 - **Storage format**: 
-  - vec0 virtual table: Embeddings stored as JSON arrays (`JSON.stringify(embedding)`)
-  - Blob fallback: Embeddings stored as BLOB (float32 array)
+  - vec0 virtual table: Embeddings stored as JSON arrays using direct SQL with `vec_f32()` function
+    - Format: `INSERT INTO documents_vec (document_id, embedding) VALUES (${docId}, vec_f32('${escapedJson}'))`
+    - **Critical**: vec0's `float[1536]` column type doesn't support parameterized queries - must use direct SQL construction
+    - JSON strings are escaped (single quotes doubled) to prevent SQL injection
+    - Uses `db.exec()` instead of prepared statements for vec0 inserts
+  - Blob fallback: Embeddings stored as BLOB (float32 array) using parameterized queries
   - Code automatically detects vec0 availability and uses appropriate format
 
 ### Claude Inference
@@ -266,6 +270,7 @@ CREATE TABLE relationships (
 3. **API Costs**: Batch requests, use checkpoints to avoid re-processing
 4. **Snowflake Column Names**: Uppercase normalization required
 5. **Schema Compatibility**: `documents_vec` uses `document_id` column (not `id`) for test compatibility - migration script available
+6. **vec0 Parameter Binding**: vec0's `float[1536]` column type doesn't support parameterized queries with `vec_f32()` function - must use direct SQL construction with proper escaping
 
 ## Migration and Maintenance
 
@@ -284,3 +289,16 @@ This will:
 - `documents_vec` column renamed: `id` → `document_id`
 - Affects: `init.ts`, `populate.ts`, `hybrid-search.ts`, `incremental.ts`, `optimize.ts`
 - Migration script: `scripts/migrate-vec-to-vec0.ts`
+
+### vec0 Insert Implementation (December 11, 2025)
+- **Critical Fix**: vec0's `float[1536]` column type requires direct SQL construction, not parameterized queries
+- **Implementation**: 
+  ```typescript
+  const embeddingJson = JSON.stringify(embedding);
+  const escapedJson = embeddingJson.replace(/'/g, "''");
+  const insertSql = `INSERT INTO documents_vec (document_id, embedding) VALUES (${docId}, vec_f32('${escapedJson}'))`;
+  db.exec(insertSql);
+  ```
+- **Why**: Parameterized queries with `vec_f32(?)` fail with "Only integers are allowed for primary key values" error
+- **Security**: JSON strings are escaped to prevent SQL injection (single quotes doubled)
+- **Fallback**: When vec0 unavailable, uses BLOB storage with parameterized queries (works fine)

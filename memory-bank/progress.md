@@ -121,7 +121,7 @@ tribal-knowledge.db (SQLite)
 - ~~FK relationship extraction not matching documenter format~~ → Fixed: Added Unicode arrow `→` pattern matching
 - ~~Snowflake SDK verbose logging~~ → Fixed: Configured log level to WARN
 - ~~documents_vec schema mismatch~~ → Fixed: Changed column from `id` to `document_id` throughout codebase for test compatibility
-- ~~vec0 embedding format error~~ → Fixed: vec0 requires JSON array format, not BLOB. Code now detects vec0 availability and inserts/reads accordingly
+- ~~vec0 embedding insert error~~ → Fixed: vec0's `float[1536]` doesn't support parameterized queries. Now uses direct SQL with `vec_f32()` function wrapper. JSON strings are properly escaped for security.
 
 ### Open
 - Retriever/MCP server not yet implemented
