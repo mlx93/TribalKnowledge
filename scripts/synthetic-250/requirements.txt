@@ -1,0 +1,4 @@
+# Requirements for synthetic-250 database setup
+psycopg2-binary>=2.9.0
+faker>=18.0.0
+

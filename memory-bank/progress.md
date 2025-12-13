@@ -75,6 +75,31 @@ tribal-knowledge.db (SQLite)
 
 ## What's Left to Build
 
+### LLM Fallback (OpenRouter → GPT-4o) ⏳ PLANNED
+- **Plan**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
+- **Status**: Planning complete, implementation pending
+- **Needed**:
+  - [ ] Update `src/utils/llm.ts` with fallback logic (OpenRouter fails → GPT-4o)
+  - [ ] Add `LLM_FALLBACK_ENABLED` and `LLM_FALLBACK_MODEL` env vars
+  - [ ] Update config schema
+  - [ ] Test with OpenRouter disabled
+
+### SFTP Sync ⏳ PLANNED
+- **Plan**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
+- **SFTP Server**: `129.158.231.129:4100` (user: `gauntlet`)
+- **Remote Structure**:
+  - `/data/index/index.db` ← `data/tribal-knowledge.db` (RENAMED to index.db)
+  - `/data/map/documentation-manifest.json` ← `docs/documentation-manifest.json`
+  - `/data/map/{db_name}/` ← `docs/databases/{db_name}/`
+- **Status**: Planning complete, implementation pending
+- **Needed**:
+  - [ ] Install `ssh2-sftp-client` dependency
+  - [ ] Create `src/utils/sftp-sync.ts`
+  - [ ] Create `src/cli/sync.ts`
+  - [ ] Add npm scripts: `sync`, `sync:index`, `sync:docs`
+  - [ ] Backup existing remote files before upload
+  - [ ] Test with real SFTP server
+
 ### Retriever/MCP Server ⏳
 - **Location**: `TribalAgent/src/agents/retrieval/`
 - **Status**: Hybrid search logic exists, MCP tools pending

@@ -2,9 +2,14 @@
 
 ## Current Work Focus
 
-**Status**: Implementation Complete - Planner, Documenter, Indexer All Working
+**Status**: Planning - LLM Fallback & SFTP Sync Features
 
-The project has completed implementation of the core pipeline agents. The full pipeline (plan → document → index) is operational. The Retriever/MCP Server is the final remaining agent.
+The core pipeline (plan → document → index) is operational. Current focus is on two new features:
+
+1. **LLM Fallback**: Enable GPT-4o as backup when OpenRouter (Claude) fails
+2. **SFTP Sync**: Push index database and docs to remote SFTP server with backup
+
+**Plan Document**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
 
 ## Recent Changes (December 11, 2025)
 
@@ -114,7 +119,24 @@ All commands run from `TribalAgent/` with `npx dotenv-cli` prefix:
 
 ## Next Steps
 
-### Immediate: Retriever/MCP Server
+### Immediate: LLM Fallback & SFTP Sync (December 13, 2025)
+**Plan**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
+
+#### Phase 1: LLM Fallback
+1. Update `src/utils/llm.ts` with fallback logic (OpenRouter → GPT-4o)
+2. Add config schema for fallback options
+3. Update `.env.example` with `LLM_FALLBACK_ENABLED`, `LLM_FALLBACK_MODEL`
+4. Test with OpenRouter disabled
+
+#### Phase 2: SFTP Sync
+1. Install `ssh2-sftp-client` dependency
+2. Create `src/utils/sftp-sync.ts` - sync service
+3. Create `src/cli/sync.ts` - CLI command
+4. Add npm scripts: `sync`, `sync:index`, `sync:docs`, `pipeline:deploy`
+5. Configure SFTP: `SFTP_HOST`, `SFTP_PORT`, `SFTP_USER`, `SFTP_PASSWORD`
+6. Test with real SFTP server (129.158.231.129:4100)
+
+### Then: Retriever/MCP Server
 1. Implement MCP tool handlers
 2. Complete hybrid search integration (FTS5 + vector + RRF)
 3. Add context budgeting and compression
