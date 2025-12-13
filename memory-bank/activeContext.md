@@ -2,12 +2,12 @@
 
 ## Current Work Focus
 
-**Status**: Planning - LLM Fallback & SFTP Sync Features
+**Status**: Implementation Complete - LLM Fallback & SFTP Sync Features
 
-The core pipeline (plan → document → index) is operational. Current focus is on two new features:
+The core pipeline (plan → document → index) is operational. Two new features have been implemented:
 
-1. **LLM Fallback**: Enable GPT-4o as backup when OpenRouter (Claude) fails
-2. **SFTP Sync**: Push index database and docs to remote SFTP server with backup
+1. **LLM Fallback** ✅: GPT-4o automatic backup when OpenRouter (Claude) fails
+2. **SFTP Sync** ✅: Push index database and docs to remote SFTP server with backup
 
 **Plan Document**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
 
@@ -119,22 +119,24 @@ All commands run from `TribalAgent/` with `npx dotenv-cli` prefix:
 
 ## Next Steps
 
-### Immediate: LLM Fallback & SFTP Sync (December 13, 2025)
+### Completed: LLM Fallback & SFTP Sync (December 13, 2025) ✅
 **Plan**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
 
-#### Phase 1: LLM Fallback
-1. Update `src/utils/llm.ts` with fallback logic (OpenRouter → GPT-4o)
-2. Add config schema for fallback options
-3. Update `.env.example` with `LLM_FALLBACK_ENABLED`, `LLM_FALLBACK_MODEL`
-4. Test with OpenRouter disabled
+#### LLM Fallback ✅
+- `src/utils/llm.ts` - Automatic fallback from Claude to GPT-4o
+- Uses existing `OPENAI_API_KEY` - no new key needed
+- Configurable via `LLM_FALLBACK_ENABLED` and `LLM_FALLBACK_MODEL`
 
-#### Phase 2: SFTP Sync
-1. Install `ssh2-sftp-client` dependency
-2. Create `src/utils/sftp-sync.ts` - sync service
-3. Create `src/cli/sync.ts` - CLI command
-4. Add npm scripts: `sync`, `sync:index`, `sync:docs`, `pipeline:deploy`
-5. Configure SFTP: `SFTP_HOST`, `SFTP_PORT`, `SFTP_USER`, `SFTP_PASSWORD`
-6. Test with real SFTP server (129.158.231.129:4100)
+#### SFTP Sync ✅
+- `src/utils/sftp-sync.ts` - SFTP sync service
+- `src/cli/sync.ts` - CLI command
+- npm scripts: `sync`, `sync:index`, `sync:docs`, `sync:no-backup`, `sync:dry-run`, `pipeline:deploy`
+- SFTP server: `129.158.231.129:4100`
+
+### Immediate: Test & Validate
+1. Test SFTP sync with real server
+2. Test LLM fallback by disabling OpenRouter key
+3. Run full `npm run pipeline:deploy`
 
 ### Then: Retriever/MCP Server
 1. Implement MCP tool handlers

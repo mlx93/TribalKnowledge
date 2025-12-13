@@ -75,30 +75,33 @@ tribal-knowledge.db (SQLite)
 
 ## What's Left to Build
 
-### LLM Fallback (OpenRouter → GPT-4o) ⏳ PLANNED
+### LLM Fallback (OpenRouter → GPT-4o) ✅ COMPLETE
 - **Plan**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
-- **Status**: Planning complete, implementation pending
-- **Needed**:
-  - [ ] Update `src/utils/llm.ts` with fallback logic (OpenRouter fails → GPT-4o)
-  - [ ] Add `LLM_FALLBACK_ENABLED` and `LLM_FALLBACK_MODEL` env vars
-  - [ ] Update config schema
-  - [ ] Test with OpenRouter disabled
+- **Status**: Implemented December 13, 2025
+- **Features**:
+  - [x] Automatic fallback from Claude to GPT-4o when OpenRouter fails
+  - [x] Uses existing `OPENAI_API_KEY` (same as embeddings)
+  - [x] Configurable via `LLM_FALLBACK_ENABLED` and `LLM_FALLBACK_MODEL`
+  - [x] Response includes `usedFallback` and `actualModel` fields
+  - [x] `getFallbackStatus()` export for debugging
+- **Files**: `src/utils/llm.ts`
 
-### SFTP Sync ⏳ PLANNED
+### SFTP Sync ✅ COMPLETE
 - **Plan**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
+- **Status**: Implemented December 13, 2025
 - **SFTP Server**: `129.158.231.129:4100` (user: `gauntlet`)
 - **Remote Structure**:
   - `/data/index/index.db` ← `data/tribal-knowledge.db` (RENAMED to index.db)
   - `/data/map/documentation-manifest.json` ← `docs/documentation-manifest.json`
   - `/data/map/{db_name}/` ← `docs/databases/{db_name}/`
-- **Status**: Planning complete, implementation pending
-- **Needed**:
-  - [ ] Install `ssh2-sftp-client` dependency
-  - [ ] Create `src/utils/sftp-sync.ts`
-  - [ ] Create `src/cli/sync.ts`
-  - [ ] Add npm scripts: `sync`, `sync:index`, `sync:docs`
-  - [ ] Backup existing remote files before upload
-  - [ ] Test with real SFTP server
+- **Features**:
+  - [x] `ssh2-sftp-client` dependency installed
+  - [x] `src/utils/sftp-sync.ts` - SFTP sync service
+  - [x] `src/cli/sync.ts` - CLI command
+  - [x] npm scripts: `sync`, `sync:index`, `sync:docs`, `sync:no-backup`, `sync:dry-run`
+  - [x] `npm run pipeline:deploy` - full pipeline + sync
+  - [x] Automatic backup of existing remote files
+  - [x] Configurable backup retention (default: 5)
 
 ### Retriever/MCP Server ⏳
 - **Location**: `TribalAgent/src/agents/retrieval/`

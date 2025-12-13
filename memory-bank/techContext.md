@@ -302,3 +302,65 @@ This will:
 - **Why**: Parameterized queries with `vec_f32(?)` fail with "Only integers are allowed for primary key values" error
 - **Security**: JSON strings are escaped to prevent SQL injection (single quotes doubled)
 - **Fallback**: When vec0 unavailable, uses BLOB storage with parameterized queries (works fine)
+
+## LLM Fallback System (December 13, 2025)
+
+### Overview
+Automatic fallback from OpenRouter (Claude) to OpenAI (GPT-4o) when primary LLM fails.
+
+### Configuration
+- `LLM_FALLBACK_ENABLED` - Enable/disable fallback (default: `true`)
+- `LLM_FALLBACK_MODEL` - Fallback model (default: `gpt-4o`)
+- Uses existing `OPENAI_API_KEY` - no additional key needed!
+
+### Behavior
+1. Primary: Try OpenRouter (Claude) with retry logic
+2. On failure: Automatically fall back to GPT-4o via OpenAI
+3. Response includes `usedFallback: true` and `actualModel` when fallback triggered
+4. Both providers failing results in combined error message
+
+### Files
+- `src/utils/llm.ts` - Fallback logic in `callLLM()` function
+- New export: `getFallbackStatus()` for debugging
+
+## SFTP Sync System (December 13, 2025)
+
+### Overview
+Sync index database and documentation to remote SFTP server with backup support.
+
+### SFTP Server
+- Host: `129.158.231.129`
+- Port: `4100`
+- User: `gauntlet`
+- Protocol: SFTP only (no SSH shell)
+
+### File Mapping
+| Local | Remote | Notes |
+|-------|--------|-------|
+| `data/tribal-knowledge.db` | `/data/index/index.db` | RENAMED to index.db |
+| `docs/documentation-manifest.json` | `/data/map/documentation-manifest.json` | |
+| `docs/databases/{db}/` | `/data/map/{db}/` | Database docs |
+
+### Environment Variables
+```bash
+SFTP_HOST=129.158.231.129
+SFTP_PORT=4100
+SFTP_USER=gauntlet
+SFTP_PASSWORD=...           # Or use SFTP_PRIVATE_KEY_PATH
+SFTP_REMOTE_INDEX_PATH=/data/index
+SFTP_REMOTE_MAP_PATH=/data/map
+```
+
+### CLI Commands
+| Command | Description |
+|---------|-------------|
+| `npm run sync` | Full sync with backup |
+| `npm run sync:index` | Index only |
+| `npm run sync:docs` | Docs only |
+| `npm run sync:no-backup` | Skip backup |
+| `npm run sync:dry-run` | Preview changes |
+| `npm run pipeline:deploy` | pipeline + sync |
+
+### Files
+- `src/utils/sftp-sync.ts` - SFTP sync service
+- `src/cli/sync.ts` - CLI command
