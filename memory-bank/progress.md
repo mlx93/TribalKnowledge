@@ -29,10 +29,14 @@ Run with: `npx dotenv-cli npm run pipeline`
   - Parallel table processing (batch size: 3)
   - Parallel column inference (batch size: 5)
   - TableDocumenter and ColumnInferencer sub-agents
+  - **SemanticEnricher** sub-agent for semantic metadata (roles, typical joins, analysis patterns)
+  - **CrossDomainRelationshipGenerator** for domain relationship maps
   - LLM-powered semantic descriptions
   - Checkpoint recovery
   - Documentation manifest generation
   - Progress tracking
+  - **Semantic metadata**: All tables include semantic_roles, typical_joins, analysis_patterns
+  - **Cross-domain maps**: Auto-generated relationship documentation per database
 
 ### Indexer ✅
 - **Location**: `TribalAgent/src/agents/indexer/`
@@ -104,10 +108,15 @@ tribal-knowledge.db (SQLite)
   - [x] Configurable backup retention (default: 5)
 
 ### Retriever/MCP Server ⏳
-- **Location**: `TribalAgent/src/agents/retrieval/`
-- **Status**: Hybrid search logic exists, MCP tools pending
+- **Location**: `TribalAgent/src/agents/retrieval/` (TribalAgent) + `Company-MCP/` (Noah's repo)
+- **Status**: Hybrid search logic exists, MCP tools partially implemented
+- **Completed**:
+  - [x] Database FK constraints added (24 FKs for product_id columns)
+  - [x] Supply chain test data populated (suppliers, supplier_products, POs, PO lines)
+  - [x] Sales data with valid product_ids for margin analysis
 - **Needed**:
-  - [ ] MCP tool handlers (search_tables, get_table_schema, get_join_path)
+  - [ ] `get_column_usage()` tool in Company-MCP (find all tables using a column)
+  - [ ] Enhanced `get_join_path()` output (complete SQL, intermediate tables)
   - [ ] Hybrid search integration (FTS5 + vector + RRF)
   - [ ] Context budgeting and compression
   - [ ] MCP protocol server
@@ -152,8 +161,9 @@ tribal-knowledge.db (SQLite)
 - ~~vec0 embedding insert error~~ → Fixed: vec0's `float[1536]` doesn't support parameterized queries. Now uses direct SQL with `vec_f32()` function wrapper. JSON strings are properly escaped for security.
 
 ### Open
-- Retriever/MCP server not yet implemented
+- `get_column_usage()` MCP tool not yet implemented (lives in Company-MCP repo)
 - End-to-end integration tests pending
+- Query pattern templates (cancelled - not needed with semantic metadata)
 
 ## Success Metrics
 
@@ -170,3 +180,6 @@ tribal-knowledge.db (SQLite)
 - sqlite-vec requires manual build on macOS (see `build-sqlite-vec.sh`)
 - All agents support checkpoint recovery for interrupted runs
 - Parallelization significantly improved documenter performance
+- **Documentation Quality**: Semantic metadata and cross-domain maps enable better join path discovery
+- **Database State**: Supabase synthetic_250_postgres now has proper FK constraints and realistic test data for margin analysis
+- **Root Cause Analysis**: FK extraction "bug" was actually missing database constraints - fixed by adding FKs to Supabase

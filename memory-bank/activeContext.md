@@ -2,14 +2,53 @@
 
 ## Current Work Focus
 
-**Status**: Implementation Complete - LLM Fallback & SFTP Sync Features
+**Status**: Documentation Enhancements - Semantic Metadata & Cross-Domain Relationships
 
-The core pipeline (plan → document → index) is operational. Two new features have been implemented:
+The core pipeline (plan → document → index) is operational. Recent enhancements focus on improving documentation quality for better join path discovery and AI-assisted querying.
 
-1. **LLM Fallback** ✅: GPT-4o automatic backup when OpenRouter (Claude) fails
-2. **SFTP Sync** ✅: Push index database and docs to remote SFTP server with backup
+**Latest Work** (December 14, 2025):
+1. **Database FK Constraints** ✅: Added 24 foreign key constraints to Supabase for product_id columns
+2. **Supply Chain Data** ✅: Populated suppliers, supplier_products, purchase_orders, purchase_order_lines with realistic cost data
+3. **Semantic Metadata** ✅: Enhanced table documentation with semantic roles, typical joins, and analysis patterns
+4. **Cross-Domain Relationship Maps** ✅: Auto-generated relationship maps showing how domains connect
 
-**Plan Document**: `PlanningDocs/llm-fallback-sftp-sync-plan.md`
+**Plan Documents**: 
+- `PlanningDocs/llm-fallback-sftp-sync-plan.md` (completed)
+- `MCP_GAPS_ANALYSIS.md` (analysis of documentation gaps)
+- `ACTION_PLAN_MCP_FIXES.md` (implementation plan)
+
+## Recent Changes (December 14, 2025)
+
+### Documentation Quality Enhancements (Latest)
+- **Semantic Metadata Enrichment**: Added `SemanticEnricher` sub-agent that infers:
+  - `semantic_roles`: transaction_header, transaction_detail, master_data, reference_data, bridge_table, etc.
+  - `typical_joins`: Common join patterns with relationship types, cardinality, frequency
+  - `analysis_patterns`: Business use cases this table supports
+  - Location: `src/agents/documenter/sub-agents/SemanticEnricher.ts`
+  - Integrated into `TableDocumenter` - all tables now include semantic metadata in JSON and Markdown
+- **Cross-Domain Relationship Maps**: New generator creates `docs/{database}/cross_domain_relationships.md`:
+  - Shows how business domains connect (e.g., Sales → Procurement)
+  - Identifies FK-based and common-column relationships
+  - LLM-generated use cases for each domain pair
+  - Example SQL joins
+  - Location: `src/agents/documenter/generators/CrossDomainRelationshipGenerator.ts`
+  - Runs automatically after all work units complete
+
+### Database Schema Improvements
+- **FK Constraints Added**: Added 24 foreign key constraints to Supabase synthetic_250_postgres database:
+  - Critical for margin analysis: `sales_order_lines.product_id → products`, `purchase_order_lines.product_id → products`, `supplier_products.product_id → products`
+  - Enables automatic join path discovery by indexer
+  - Fixed orphaned data (set NULL or deleted invalid product_ids)
+- **Supply Chain Data Population**: Populated empty tables with realistic test data:
+  - 5 suppliers with contact info
+  - 100 supplier_products entries with unit costs (40-70% of base price for positive margins)
+  - 10 purchase orders (completed, shipped, pending statuses)
+  - 50 purchase_order_lines with cost data
+  - 30 sales_order_lines with valid product_ids matching supply chain
+
+### LLM Configuration
+- **Primary Model**: Set to `claude-haiku-4.5` via `LLM_PRIMARY_MODEL` env var
+- **Fallback**: GPT-4o available when Claude fails (via `LLM_FALLBACK_ENABLED=true`)
 
 ## Recent Changes (December 11, 2025)
 
@@ -93,8 +132,9 @@ All commands run from `TribalAgent/` with `npx dotenv-cli` prefix:
 - `progress/documentation-plan.json` - Work units and table specs
 
 ### Documenter Output
-- `docs/{work_unit}/tables/*.md` - Markdown documentation
-- `docs/{work_unit}/tables/*.json` - JSON documentation
+- `docs/databases/{database}/domains/{domain}/tables/*.md` - Markdown documentation (with semantic metadata)
+- `docs/databases/{database}/domains/{domain}/tables/*.json` - JSON documentation (with semantic_roles, typical_joins, analysis_patterns)
+- `docs/databases/{database}/cross_domain_relationships.md` - Cross-domain relationship maps
 - `docs/documentation-manifest.json` - Manifest for indexer
 - `progress/documenter-progress.json` - Checkpoint file
 
@@ -138,11 +178,14 @@ All commands run from `TribalAgent/` with `npx dotenv-cli` prefix:
 2. Test LLM fallback by disabling OpenRouter key
 3. Run full `npm run pipeline:deploy`
 
-### Then: Retriever/MCP Server
-1. Implement MCP tool handlers
-2. Complete hybrid search integration (FTS5 + vector + RRF)
-3. Add context budgeting and compression
-4. Expose search tools via MCP protocol
+### Next: MCP Tool Enhancements
+1. Implement `get_column_usage()` tool in Company-MCP repo (Priority 2)
+   - Find all tables using a common column (e.g., product_id)
+   - Suggest join patterns through bridge tables
+   - Group by business domain
+2. Enhance `get_join_path()` output with complete SQL and intermediate tables
+3. Complete hybrid search integration (FTS5 + vector + RRF)
+4. Add context budgeting and compression
 
 ### Testing
 - End-to-end pipeline testing

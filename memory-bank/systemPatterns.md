@@ -53,11 +53,14 @@ Planner (Schema Analyzer)
 **Sub-agents**:
 - **TableDocumenter**: Handles complete documentation of a single table
 - **ColumnInferencer**: Generates semantic description for a single column
+- **SemanticEnricher**: Infers semantic roles, typical joins, and analysis patterns for tables
 
 **Key Pattern**:
 - Sub-agent delegation for repeated tasks
 - Context quarantine (sub-agents return summaries, not raw data)
 - Parallel processing of work units (domains)
+- **Semantic enrichment**: Rule-based + LLM inference for table roles and join patterns
+- **Cross-domain analysis**: Post-processing step generates relationship maps after all tables documented
 
 ### 3. Indexer (Agent 2)
 
@@ -115,9 +118,11 @@ Planner (Schema Analyzer)
 2. For each table in work unit:
    - Spawn TableDocumenter sub-agent
    - TableDocumenter spawns ColumnInferencer per column
-   - Assemble markdown, write to `/docs`
+   - TableDocumenter spawns SemanticEnricher for semantic metadata
+   - Assemble markdown and JSON (with semantic metadata), write to `/docs`
 3. Update progress, continue to next table
 4. Generate manifest when complete
+5. **Post-processing**: Generate cross-domain relationship maps for each database
 
 ### Indexing Phase
 1. Read manifest, validate files exist
@@ -141,9 +146,10 @@ Planner (Schema Analyzer)
 /docs/
 ├── databases/
 │   ├── {db}/
-│   │   ├── tables/{schema}.{table}.md
-│   │   ├── schemas/{schema}.{table}.json
-│   │   ├── domains/{domain}.md
+│   │   ├── domains/{domain}/
+│   │   │   └── tables/{schema}.{table}.md (with semantic metadata)
+│   │   │   └── tables/{schema}.{table}.json (with semantic_roles, typical_joins, analysis_patterns)
+│   │   ├── cross_domain_relationships.md (domain connection maps)
 │   │   └── er-diagrams/
 ├── documentation-manifest.json
 
@@ -220,6 +226,20 @@ Each contract includes:
 - Partial success is valid
 - Errors isolated to components
 
+### 8. Semantic Metadata Pattern
+- **Rule-based inference**: Pattern matching on table/column names and structure
+- **LLM enrichment**: LLM refines semantic roles and analysis patterns
+- **Merge strategy**: Combine rule-based (accurate) with LLM (nuanced)
+- **Output**: semantic_roles, typical_joins, analysis_patterns in every table doc
+- **Use case**: Enables AI assistants to understand table purposes and suggest joins
+
+### 9. Cross-Domain Relationship Discovery
+- **Post-processing**: Runs after all tables documented
+- **FK analysis**: Finds foreign keys crossing domain boundaries
+- **Common column detection**: Identifies implicit joins through shared columns
+- **LLM use cases**: Generates business use cases for each domain pair
+- **Output**: Markdown map file per database showing domain connections
+
 ## Key Technical Decisions
 
 | Decision | Choice | Rationale |
@@ -245,8 +265,9 @@ Planner
 Documenter
   ├─→ Reads: documentation-plan.json
   ├─→ Uses: column-description.md, table-description.md
-  ├─→ Spawns: TableDocumenter, ColumnInferencer
-  └─→ Writes: /docs/*, documentation-manifest.json
+  ├─→ Spawns: TableDocumenter, ColumnInferencer, SemanticEnricher
+  ├─→ Post-processes: CrossDomainRelationshipGenerator
+  └─→ Writes: /docs/* (with semantic metadata), cross_domain_relationships.md, documentation-manifest.json
 
 Indexer
   ├─→ Reads: documentation-manifest.json, /docs/*
