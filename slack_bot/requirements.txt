@@ -4,6 +4,7 @@
 # Slack SDK with async support
 slack-bolt>=1.18.0
 slack-sdk>=3.21.0
+aiohttp>=3.9.0
 
 # Async HTTP client for MCP calls
 httpx>=0.26.0
