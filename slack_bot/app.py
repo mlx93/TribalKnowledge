@@ -543,8 +543,16 @@ async def handle_reaction_added(event: dict, client: AsyncWebClient):
     
     # 📦 Package emoji - Save to cache (for manual cache mode)
     if reaction == "package" and cache_store:
-        # Only save if not already cached and has tools
-        if not result.from_cache and result.tools_used:
+        if result.from_cache:
+            # Already cached - confirm with different emoji
+            logger.info(f"📦 reaction on already-cached response: '{question[:50]}...'")
+            await client.reactions_add(
+                channel=channel,
+                timestamp=message_ts,
+                name="ballot_box_with_check",  # ☑️ already cached
+            )
+        elif result.tools_used:
+            # Save new response to cache
             cache_id = await cache_store.save(
                 question=question,
                 response_text=result.response_text,
@@ -554,11 +562,11 @@ async def handle_reaction_added(event: dict, client: AsyncWebClient):
             )
             if cache_id > 0:
                 logger.info(f"Manual cache save via 📦 reaction: '{question[:50]}...'")
-                # React to confirm
+                # React to confirm (requires reactions:write scope)
                 await client.reactions_add(
                     channel=channel,
                     timestamp=message_ts,
-                    name="white_check_mark",
+                    name="white_check_mark",  # ✅ saved
                 )
     
     # 🔄 Refresh emoji - Clear cache and re-run
