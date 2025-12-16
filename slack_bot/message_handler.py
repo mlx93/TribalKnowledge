@@ -183,10 +183,14 @@ async def process_message(
                     func = tool_call["function"]
                     full_name = func["name"]
                     
-                    # Parse arguments
-                    try:
-                        arguments = json.loads(func["arguments"])
-                    except json.JSONDecodeError:
+                    # Parse arguments (handle None or empty)
+                    raw_args = func.get("arguments")
+                    if raw_args:
+                        try:
+                            arguments = json.loads(raw_args)
+                        except (json.JSONDecodeError, TypeError):
+                            arguments = {}
+                    else:
                         arguments = {}
                     
                     logger.info(f"Calling tool: {full_name}")
