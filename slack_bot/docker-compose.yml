@@ -1,0 +1,45 @@
+# Tribal Knowledge Slack Bot
+# Start: docker-compose up -d
+# Logs: docker-compose logs -f
+# Stop: docker-compose down
+
+version: "3.8"
+
+services:
+  slack-bot:
+    build: .
+    container_name: tribal-slack-bot
+    restart: unless-stopped
+    
+    # Environment variables from .env file
+    env_file:
+      - .env
+    
+    # Override specific variables if needed
+    environment:
+      - THREAD_CONTEXT_DB=/data/thread_contexts.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    
+    # Persist SQLite database across restarts
+    volumes:
+      - slack_bot_data:/data
+    
+    # No ports needed - Socket Mode connects outbound to Slack
+    # Network access required for:
+    # - Slack WebSocket (Socket Mode)
+    # - OpenRouter API
+    # - OpenAI API
+    # - MCP servers (company-mcp.com)
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import slack_bolt; print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  slack_bot_data:
+    driver: local
+

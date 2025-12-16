@@ -1,0 +1,25 @@
+# Tribal Knowledge Slack Bot Dependencies
+# Install: pip install -r requirements.txt
+
+# Slack SDK with async support
+slack-bolt>=1.18.0
+slack-sdk>=3.21.0
+
+# Async HTTP client for MCP calls
+httpx>=0.26.0
+
+# OpenAI SDK (used for both OpenRouter and OpenAI - OpenAI-compatible API)
+openai>=1.0.0
+
+# Async SQLite for thread context persistence
+aiosqlite>=0.19.0
+
+# Environment variable loading
+python-dotenv>=1.0.0
+
+# Async utilities
+asyncio-throttle>=1.0.0
+
+# Type hints
+typing-extensions>=4.0.0
+

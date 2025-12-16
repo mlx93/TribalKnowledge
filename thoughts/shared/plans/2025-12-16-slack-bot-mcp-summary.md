@@ -167,7 +167,7 @@ MCP_POSTGRES_URL=https://company-mcp.com/mcp/postgres
 # LLM configuration
 OPENROUTER_API_KEY=sk-or-...
 OPENAI_API_KEY=sk-...
-LLM_PRIMARY_MODEL=anthropic/claude-3-5-haiku-20241022
+LLM_PRIMARY_MODEL=anthropic/claude-opus-4.5
 LLM_FALLBACK_MODEL=gpt-4o
 LLM_FALLBACK_ENABLED=true
 
