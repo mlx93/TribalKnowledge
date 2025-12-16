@@ -285,6 +285,14 @@ async def _process_and_respond(
         # Get or create thread context
         thread_context = await context_store.get_or_create(channel, thread_ts, user_id)
         
+        # Create progress callback to update the thinking message
+        async def on_progress(progress_text: str):
+            """Update the thinking message with progress."""
+            try:
+                await update_message(client, channel, thinking_ts, progress_text)
+            except Exception as e:
+                logger.warning(f"Failed to update progress: {e}")
+        
         # Process with MCP client and LLM
         async with MCPClient() as mcp_client:
             llm_provider = LLMProvider()
@@ -295,6 +303,7 @@ async def _process_and_respond(
                     context=thread_context,
                     mcp_client=mcp_client,
                     llm_provider=llm_provider,
+                    on_progress=on_progress,
                 )
             finally:
                 await llm_provider.close()
@@ -302,8 +311,8 @@ async def _process_and_respond(
         # Save updated context
         await context_store.save(thread_context)
         
-        # Format response for Slack
-        response_text = format_response_for_slack(result, show_metadata=False)
+        # Format response for Slack (show tool usage summary)
+        response_text = format_response_for_slack(result, show_metadata=True)
         response_text = truncate_for_slack(response_text)
         
         # Update the thinking message with the response

@@ -15,7 +15,7 @@ Based on: Company-MCP/frontend/main.py
 
 import json
 import logging
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Callable, Awaitable
 from dataclasses import dataclass, field
 
 from .llm_provider import LLMProvider, LLMResponse
@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 # Maximum iterations for the agentic loop
 MAX_ITERATIONS = 10
+
+# Type for progress callback
+ProgressCallback = Callable[[str], Awaitable[None]]
 
 
 def build_system_prompt(tool_names: List[str]) -> str:
@@ -82,15 +85,35 @@ When answering database questions, follow this workflow:
 
 3. **FINALLY: Execute and present results** (use postgres-mcp)
    - Use postgres-mcp__execute_query to run your SQL
-   - Format results nicely for Slack (tables, summaries)
+   - Format results nicely for Slack
    - If query fails, explain the error and try a corrected query
 
-## Response Formatting for Slack
+## IMPORTANT: Slack Formatting Rules
 
-- Use Slack markdown: *bold*, _italic_, `code`, ```code blocks```
-- Format query results as readable tables or lists
-- Keep responses concise but informative
-- Include the SQL query you ran for transparency
+Slack has LIMITED markdown support. Follow these rules:
+
+1. **For tables/data**: ALWAYS use triple backticks (```) to create code blocks:
+   ```
+   Column1    | Column2    | Column3
+   -----------|------------|--------
+   Value1     | Value2     | Value3
+   ```
+
+2. **Text formatting**: Use *bold* and _italic_ sparingly
+
+3. **Lists**: Use simple bullet points with - or •
+
+4. **Numbers/Money**: Format clearly: $1,234.56
+
+5. **Keep it concise**: Slack threads should be scannable
+
+Example of good table formatting:
+```
+Order ID | Customer        | Revenue      | Margin
+---------|-----------------|--------------|--------
+1001     | Acme Corp       | $50,000      | 35.2%
+1002     | Widget Inc      | $32,500      | 42.1%
+```
 
 ## Guidelines
 
@@ -98,7 +121,18 @@ When answering database questions, follow this workflow:
 2. If a tool returns an error, explain what went wrong
 3. Be conversational and helpful
 4. When uncertain, ask clarifying questions
-5. Remember: you're in a Slack thread, so be concise"""
+5. Remember: you're in a Slack thread, so be concise
+6. ALWAYS wrap tabular data in ``` code blocks for proper formatting"""
+
+
+@dataclass
+class ToolCallInfo:
+    """Information about a tool call for progress updates."""
+    server: str
+    tool: str
+    arguments: Dict[str, Any]
+    status: str = "calling"  # "calling", "complete", "error"
+    result_preview: Optional[str] = None
 
 
 @dataclass
@@ -112,11 +146,43 @@ class ProcessingResult:
     error: Optional[str] = None
 
 
+def format_progress_message(
+    tools_in_progress: List[ToolCallInfo],
+    tools_completed: List[ToolCallInfo],
+) -> str:
+    """Format a progress message showing tool calls."""
+    lines = ["🤔 *Working on it...*\n"]
+    
+    # Show completed tools
+    for tool in tools_completed:
+        if tool.status == "complete":
+            lines.append(f"✅ `{tool.server}/{tool.tool}`")
+        else:
+            lines.append(f"❌ `{tool.server}/{tool.tool}` (error)")
+    
+    # Show in-progress tools
+    for tool in tools_in_progress:
+        args_preview = ""
+        if tool.arguments:
+            # Show a preview of the arguments
+            if "sql" in tool.arguments:
+                sql = tool.arguments["sql"][:50]
+                args_preview = f" - `{sql}...`"
+            elif "query" in tool.arguments:
+                args_preview = f" - \"{tool.arguments['query']}\""
+            elif "table" in tool.arguments:
+                args_preview = f" - {tool.arguments['table']}"
+        lines.append(f"⏳ `{tool.server}/{tool.tool}`{args_preview}")
+    
+    return "\n".join(lines)
+
+
 async def process_message(
     user_message: str,
     context: ThreadContext,
     mcp_client: MCPClient,
     llm_provider: LLMProvider,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> ProcessingResult:
     """
     Process a user message through the agentic loop.
@@ -126,6 +192,7 @@ async def process_message(
         context: Thread context with conversation history
         mcp_client: MCP client for tool calls
         llm_provider: LLM provider for AI calls
+        on_progress: Optional callback for progress updates (receives formatted message)
     
     Returns:
         ProcessingResult with response and metadata
@@ -144,6 +211,7 @@ async def process_message(
     messages.extend(context.get_messages_for_llm(max_messages=15))
     
     tools_used = []
+    tools_completed: List[ToolCallInfo] = []
     iteration = 0
     used_fallback = False
     actual_model = ""
@@ -193,13 +261,35 @@ async def process_message(
                     else:
                         arguments = {}
                     
+                    # Parse tool name
+                    server_id, tool_name = parse_tool_name(full_name)
+                    
+                    # Create tool info for progress tracking
+                    tool_info = ToolCallInfo(
+                        server=server_id,
+                        tool=tool_name,
+                        arguments=arguments,
+                        status="calling",
+                    )
+                    
+                    # Send progress update
+                    if on_progress:
+                        progress_msg = format_progress_message([tool_info], tools_completed)
+                        await on_progress(progress_msg)
+                    
                     logger.info(f"Calling tool: {full_name}")
                     
                     # Execute tool via MCP
-                    tool_result = await mcp_client.call_tool(full_name, arguments)
+                    try:
+                        tool_result = await mcp_client.call_tool(full_name, arguments)
+                        tool_info.status = "complete"
+                    except Exception as e:
+                        tool_result = {"error": str(e)}
+                        tool_info.status = "error"
+                    
+                    tools_completed.append(tool_info)
                     
                     # Record tool usage
-                    server_id, tool_name = parse_tool_name(full_name)
                     tools_used.append({
                         "server": server_id,
                         "tool": tool_name,
@@ -214,6 +304,12 @@ async def process_message(
                         "content": result_str,
                     })
                     context.add_tool_result(tool_id, result_str)
+                
+                # Update progress to show all tools complete, waiting for LLM
+                if on_progress:
+                    progress_msg = format_progress_message([], tools_completed)
+                    progress_msg += "\n\n💭 _Analyzing results..._"
+                    await on_progress(progress_msg)
                 
                 # Continue loop to get LLM's response to tool results
                 continue
@@ -256,37 +352,30 @@ async def process_message(
 
 def format_response_for_slack(
     result: ProcessingResult,
-    show_metadata: bool = False,
+    show_metadata: bool = True,
 ) -> str:
     """
     Format the processing result for Slack.
     
     Args:
         result: ProcessingResult from process_message
-        show_metadata: Whether to include debug metadata
+        show_metadata: Whether to include tool usage summary
     
     Returns:
         Formatted string for Slack
     """
     text = result.response_text
     
-    if show_metadata and (result.tools_used or result.used_fallback):
-        metadata_parts = []
-        
-        if result.tools_used:
-            tools_summary = ", ".join(
-                f"`{t['server']}/{t['tool']}`"
-                for t in result.tools_used[:5]
-            )
-            if len(result.tools_used) > 5:
-                tools_summary += f" (+{len(result.tools_used) - 5} more)"
-            metadata_parts.append(f"🔧 Tools: {tools_summary}")
-        
-        if result.used_fallback:
-            metadata_parts.append(f"⚠️ Used fallback model: {result.actual_model}")
-        
-        if metadata_parts:
-            text += "\n\n" + " | ".join(metadata_parts)
+    # Add tool usage summary at the end
+    if show_metadata and result.tools_used:
+        tools_summary = ", ".join(
+            f"`{t['server']}/{t['tool']}`"
+            for t in result.tools_used
+        )
+        text += f"\n\n---\n🔧 _Used: {tools_summary}_"
+    
+    if result.used_fallback:
+        text += f"\n⚠️ _Used fallback model: {result.actual_model}_"
     
     return text
 
@@ -308,4 +397,3 @@ def truncate_for_slack(text: str, max_length: int = 3000) -> str:
         truncated = truncated[:last_newline]
     
     return truncated + "\n\n... _(response truncated)_"
-
