@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 # =============================================================================
 
-DEFAULT_PRIMARY_MODEL = "anthropic/claude-opus-4.5"
-DEFAULT_FALLBACK_MODEL = "gpt-4o"
+DEFAULT_PRIMARY_MODEL = "gpt-4o"
+DEFAULT_FALLBACK_MODEL = "gpt-4o-mini"
 
 
 @dataclass
@@ -42,12 +42,18 @@ class LLMConfig:
     
     @property
     def fallback_available(self) -> bool:
-        """Check if fallback is available (OpenAI API key is set)."""
+        """Check if fallback is available."""
+        # If primary is GPT, fallback needs OpenRouter; if primary is Claude, fallback needs OpenAI
+        if self.primary_model.startswith("gpt"):
+            return bool(self.openrouter_api_key)
         return bool(self.openai_api_key)
     
     @property
     def primary_available(self) -> bool:
-        """Check if primary (OpenRouter) is available."""
+        """Check if primary model is available."""
+        # GPT models use OpenAI, Claude models use OpenRouter
+        if self.primary_model.startswith("gpt"):
+            return bool(self.openai_api_key)
         return bool(self.openrouter_api_key)
 
 
@@ -209,17 +215,28 @@ class LLMProvider:
         """
         last_error: Optional[Exception] = None
         
-        # Try primary model (OpenRouter/Claude)
+        # Try primary model
         if self.config.primary_available:
             for attempt in range(1, max_retries + 1):
                 try:
                     logger.debug(f"Calling primary LLM ({self.config.primary_model}), attempt {attempt}/{max_retries}")
-                    response = await self._call_openrouter(
-                        messages=messages,
-                        tools=tools,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                    )
+                    
+                    # Route based on model type
+                    if self.config.primary_model.startswith("gpt"):
+                        response = await self._call_openai(
+                            messages=messages,
+                            tools=tools,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            model=self.config.primary_model,
+                        )
+                    else:
+                        response = await self._call_openrouter(
+                            messages=messages,
+                            tools=tools,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                        )
                     response.used_fallback = False
                     response.actual_model = self.config.primary_model
                     return response
@@ -247,16 +264,27 @@ class LLMProvider:
         else:
             logger.warning("Primary LLM (OpenRouter) not configured")
         
-        # Try fallback model (OpenAI/GPT-4o)
+        # Try fallback model
         if self.config.fallback_enabled and self.config.fallback_available:
             try:
                 logger.info(f"Falling back to {self.config.fallback_model}")
-                response = await self._call_openai(
-                    messages=messages,
-                    tools=tools,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                
+                # Route fallback based on model type
+                if self.config.fallback_model.startswith("gpt"):
+                    response = await self._call_openai(
+                        messages=messages,
+                        tools=tools,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        model=self.config.fallback_model,
+                    )
+                else:
+                    response = await self._call_openrouter(
+                        messages=messages,
+                        tools=tools,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
                 response.used_fallback = True
                 response.actual_model = self.config.fallback_model
                 return response
@@ -302,10 +330,11 @@ class LLMProvider:
         tools: Optional[List[Dict[str, Any]]],
         max_tokens: int,
         temperature: float,
+        model: Optional[str] = None,
     ) -> LLMResponse:
-        """Call OpenAI (GPT-4o) API."""
+        """Call OpenAI API."""
         params = {
-            "model": self.config.fallback_model,
+            "model": model or self.config.fallback_model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
