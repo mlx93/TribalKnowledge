@@ -171,13 +171,17 @@ async def update_message(
     channel: str,
     ts: str,
     text: str,
+    blocks: Optional[list] = None,
 ):
     """Update an existing message."""
-    await client.chat_update(
-        channel=channel,
-        ts=ts,
-        text=text,
-    )
+    kwargs = {
+        "channel": channel,
+        "ts": ts,
+        "text": text,  # Fallback text for notifications
+    }
+    if blocks:
+        kwargs["blocks"] = blocks
+    await client.chat_update(**kwargs)
 
 
 # =============================================================================
@@ -311,12 +315,11 @@ async def _process_and_respond(
         # Save updated context
         await context_store.save(thread_context)
         
-        # Format response for Slack (show tool usage summary)
-        response_text = format_response_for_slack(result, show_metadata=True)
-        response_text = truncate_for_slack(response_text)
+        # Format response for Slack with blocks (show tool usage summary)
+        fallback_text, blocks = format_response_for_slack(result, show_metadata=True)
         
-        # Update the thinking message with the response
-        await update_message(client, channel, thinking_ts, response_text)
+        # Update the thinking message with the response using blocks
+        await update_message(client, channel, thinking_ts, fallback_text, blocks=blocks)
         
         # Log success
         logger.info(

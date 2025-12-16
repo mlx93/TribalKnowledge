@@ -353,31 +353,142 @@ async def process_message(
 def format_response_for_slack(
     result: ProcessingResult,
     show_metadata: bool = True,
-) -> str:
+) -> tuple[str, list]:
     """
-    Format the processing result for Slack.
+    Format the processing result for Slack with blocks.
     
     Args:
         result: ProcessingResult from process_message
         show_metadata: Whether to include tool usage summary
     
     Returns:
-        Formatted string for Slack
+        Tuple of (fallback_text, blocks)
     """
-    text = result.response_text
+    blocks = []
     
-    # Add tool usage summary at the end
+    # Add tool usage summary at the TOP (collapsed view)
     if show_metadata and result.tools_used:
-        tools_summary = ", ".join(
-            f"`{t['server']}/{t['tool']}`"
-            for t in result.tools_used
-        )
-        text += f"\n\n---\n🔧 _Used: {tools_summary}_"
+        # Group tools by server
+        tools_by_server: Dict[str, List[str]] = {}
+        for t in result.tools_used:
+            server = t['server']
+            if server not in tools_by_server:
+                tools_by_server[server] = []
+            tools_by_server[server].append(t['tool'])
+        
+        # Format as compact summary
+        tool_parts = []
+        for server, tools in tools_by_server.items():
+            tool_names = ", ".join(tools)
+            tool_parts.append(f"*{server}*: {tool_names}")
+        
+        tools_text = " │ ".join(tool_parts)
+        
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"🔧 {tools_text}"}
+            ]
+        })
+        blocks.append({"type": "divider"})
     
+    # Process the response text to create proper blocks
+    response_blocks = _create_response_blocks(result.response_text)
+    blocks.extend(response_blocks)
+    
+    # Add fallback model warning if used
     if result.used_fallback:
-        text += f"\n⚠️ _Used fallback model: {result.actual_model}_"
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"⚠️ _Used fallback: {result.actual_model}_"}
+            ]
+        })
     
-    return text
+    # Fallback text for notifications
+    fallback_text = result.response_text[:500] + "..." if len(result.response_text) > 500 else result.response_text
+    
+    return fallback_text, blocks
+
+
+def _create_response_blocks(text: str) -> list:
+    """
+    Convert response text into Slack blocks, properly handling code blocks.
+    
+    Splits text on ``` to separate code blocks from regular text.
+    """
+    blocks = []
+    
+    # Split on code block markers
+    parts = text.split("```")
+    
+    for i, part in enumerate(parts):
+        if not part.strip():
+            continue
+            
+        if i % 2 == 0:
+            # Regular text (outside code blocks)
+            # Split into chunks if too long (Slack limit is ~3000 chars per block)
+            text_chunks = _chunk_text(part.strip(), 2900)
+            for chunk in text_chunks:
+                if chunk:
+                    blocks.append({
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": chunk}
+                    })
+        else:
+            # Code block content
+            code_content = part.strip()
+            # Remove language hint if present (e.g., ```sql)
+            if code_content and '\n' in code_content:
+                first_line = code_content.split('\n')[0]
+                if first_line.isalpha() and len(first_line) < 15:
+                    code_content = '\n'.join(code_content.split('\n')[1:])
+            
+            if code_content:
+                # Use rich_text block for proper code formatting
+                blocks.append({
+                    "type": "rich_text",
+                    "elements": [
+                        {
+                            "type": "rich_text_preformatted",
+                            "elements": [
+                                {"type": "text", "text": code_content[:3000]}  # Slack limit
+                            ]
+                        }
+                    ]
+                })
+    
+    # If no blocks were created, add the text as-is
+    if not blocks and text.strip():
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": text[:2900]}
+        })
+    
+    return blocks
+
+
+def _chunk_text(text: str, max_length: int) -> List[str]:
+    """Split text into chunks at paragraph boundaries."""
+    if len(text) <= max_length:
+        return [text]
+    
+    chunks = []
+    current = ""
+    
+    for paragraph in text.split("\n\n"):
+        if len(current) + len(paragraph) + 2 <= max_length:
+            current += ("\n\n" if current else "") + paragraph
+        else:
+            if current:
+                chunks.append(current)
+            current = paragraph[:max_length]
+    
+    if current:
+        chunks.append(current)
+    
+    return chunks
 
 
 def truncate_for_slack(text: str, max_length: int = 3000) -> str:
