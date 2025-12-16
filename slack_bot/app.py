@@ -293,6 +293,13 @@ async def handle_message(event: dict, client: AsyncWebClient, context: dict):
     if not user_message:
         return
     
+    # Ignore emoji-only messages (like 📦 or 🔄 sent as text instead of reactions)
+    stripped = user_message.strip()
+    if len(stripped) <= 4 and not stripped.isalnum():
+        # Likely just an emoji, ignore it
+        logger.debug(f"Ignoring emoji-only message: {stripped}")
+        return
+    
     # Process the follow-up message
     asyncio.create_task(
         _process_and_respond(client, channel, thread_ts, user, user_message)
@@ -370,6 +377,7 @@ async def _process_and_respond(
             "result": result,
             "thread_ts": thread_ts,
         }
+        logger.debug(f"Stored message mapping: {message_key} -> '{user_message[:50]}...'")
         
         # Log success
         cache_info = f"from_cache={result.from_cache}" if result.from_cache else f"iterations={result.iterations}"
@@ -519,10 +527,13 @@ async def handle_reaction_added(event: dict, client: AsyncWebClient):
     message_ts = event["item"]["ts"]
     user = event["user"]
     
+    logger.info(f"Reaction received: {reaction} on {channel}:{message_ts} by {user}")
+    
     message_key = f"{channel}:{message_ts}"
     
     # Check if this message is one of our responses
     if message_key not in message_question_map:
+        logger.debug(f"Message {message_key} not in message_question_map (have {len(message_question_map)} entries)")
         return
     
     msg_data = message_question_map[message_key]
