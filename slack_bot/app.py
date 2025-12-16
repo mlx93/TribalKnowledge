@@ -32,6 +32,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from .llm_provider import LLMProvider, get_fallback_status
 from .thread_context import ThreadContextStore, run_cleanup_task
 from .mcp_client import MCPClient, test_mcp_connectivity
+from .cache_store import QueryCacheStore, run_cache_cleanup_task, CACHE_AUTO_SAVE
 from .message_handler import (
     process_message,
     format_response_for_slack,
@@ -71,7 +72,14 @@ app = AsyncApp(
 
 # Global instances (initialized in startup)
 context_store: Optional[ThreadContextStore] = None
+cache_store: Optional[QueryCacheStore] = None
 cleanup_task: Optional[asyncio.Task] = None
+cache_cleanup_task: Optional[asyncio.Task] = None
+
+# Message-to-question mapping for reaction-based cache control
+# Key: "{channel}:{message_ts}", Value: {"question": str, "result": ProcessingResult}
+# This is kept in memory and cleared after 24 hours
+message_question_map: dict[str, dict] = {}
 
 
 # =============================================================================
@@ -80,7 +88,7 @@ cleanup_task: Optional[asyncio.Task] = None
 
 async def startup():
     """Initialize services on startup."""
-    global context_store, cleanup_task
+    global context_store, cache_store, cleanup_task, cache_cleanup_task
     
     logger.info("Starting Tribal Knowledge Slack Bot...")
     
@@ -88,14 +96,25 @@ async def startup():
     context_store = ThreadContextStore()
     await context_store.initialize()
     
-    # Start background cleanup task
+    # Initialize query cache store (shares same DB connection)
+    cache_store = QueryCacheStore()
+    await cache_store.initialize()
+    
+    # Start background cleanup tasks
     cleanup_task = asyncio.create_task(run_cleanup_task(context_store))
+    cache_cleanup_task = asyncio.create_task(run_cache_cleanup_task(cache_store))
     
     # Log configuration
     fallback_status = get_fallback_status()
     logger.info(f"LLM Config: primary={fallback_status['primary_model']}, "
                 f"fallback={fallback_status['fallback_model']}, "
                 f"fallback_enabled={fallback_status['fallback_enabled']}")
+    
+    # Log cache status
+    cache_stats = await cache_store.get_stats()
+    logger.info(f"Cache: enabled={cache_stats['enabled']}, "
+                f"entries={cache_stats['total_entries']}, "
+                f"hits={cache_stats['total_hits']}")
     
     # Test MCP connectivity
     try:
@@ -110,16 +129,28 @@ async def startup():
 
 async def shutdown():
     """Cleanup on shutdown."""
-    global context_store, cleanup_task
+    global context_store, cache_store, cleanup_task, cache_cleanup_task
     
     logger.info("Shutting down Slack Bot...")
     
+    # Cancel cleanup tasks
     if cleanup_task:
         cleanup_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
             pass
+    
+    if cache_cleanup_task:
+        cache_cleanup_task.cancel()
+        try:
+            await cache_cleanup_task
+        except asyncio.CancelledError:
+            pass
+    
+    # Close stores
+    if cache_store:
+        await cache_store.close()
     
     if context_store:
         await context_store.close()
@@ -308,6 +339,7 @@ async def _process_and_respond(
                     mcp_client=mcp_client,
                     llm_provider=llm_provider,
                     on_progress=on_progress,
+                    cache_store=cache_store,  # Pass cache store for caching
                 )
             finally:
                 await llm_provider.close()
@@ -315,17 +347,36 @@ async def _process_and_respond(
         # Save updated context
         await context_store.save(thread_context)
         
+        # If from cache, replay progress events to simulate real execution
+        if result.from_cache and result.progress_events:
+            # Replay all progress events with realistic timing
+            for i, event in enumerate(result.progress_events):
+                await update_message(client, channel, thinking_ts, event)
+                # Vary timing: faster for early events, slower for later ones
+                delay = 0.2 + (i * 0.1)  # 0.2s, 0.3s, 0.4s, etc.
+                delay = min(delay, 0.6)  # Cap at 0.6s
+                await asyncio.sleep(delay)
+        
         # Format response for Slack with blocks (show tool usage summary)
         fallback_text, blocks = format_response_for_slack(result, show_metadata=True)
         
         # Update the thinking message with the response using blocks
         await update_message(client, channel, thinking_ts, fallback_text, blocks=blocks)
         
+        # Store message-question mapping for reaction-based cache control
+        message_key = f"{channel}:{thinking_ts}"
+        message_question_map[message_key] = {
+            "question": user_message,
+            "result": result,
+            "thread_ts": thread_ts,
+        }
+        
         # Log success
+        cache_info = f"from_cache={result.from_cache}" if result.from_cache else f"iterations={result.iterations}"
         logger.info(
             f"Processed message in {channel}/{thread_ts}: "
             f"{len(result.tools_used)} tools, "
-            f"{result.iterations} iterations, "
+            f"{cache_info}, "
             f"fallback={result.used_fallback}"
         )
     
@@ -371,6 +422,17 @@ async def handle_app_home(event: dict, client: AsyncWebClient):
     else:
         context_info = "⚠️ Context store not initialized"
     
+    # Get cache stats
+    if cache_store:
+        cache_stats = await cache_store.get_stats()
+        cache_status = "enabled" if cache_stats['enabled'] else "disabled"
+        cache_info = (
+            f"📦 Cache: {cache_stats['total_entries']} entries, "
+            f"{cache_stats['total_hits']} hits ({cache_status})"
+        )
+    else:
+        cache_info = "⚠️ Cache not initialized"
+    
     # Build App Home view
     blocks = [
         {
@@ -414,7 +476,8 @@ async def handle_app_home(event: dict, client: AsyncWebClient):
                     f"• 🤖 LLM: {fallback_status['primary_model']}\n"
                     f"• 🔄 Fallback: {fallback_status['fallback_model']} "
                     f"({'enabled' if fallback_status['fallback_enabled'] else 'disabled'})\n"
-                    f"• {context_info}"
+                    f"• {context_info}\n"
+                    f"• {cache_info}"
                 ),
             }
         },
@@ -437,6 +500,82 @@ async def handle_app_home(event: dict, client: AsyncWebClient):
             "blocks": blocks,
         }
     )
+
+
+# =============================================================================
+# Reaction Handlers for Cache Control
+# =============================================================================
+
+@app.event("reaction_added")
+async def handle_reaction_added(event: dict, client: AsyncWebClient):
+    """
+    Handle emoji reactions for cache control.
+    
+    📦 (package) - Save this response to cache (for manual cache mode)
+    🔄 (arrows_counterclockwise) - Clear from cache and re-run fresh
+    """
+    reaction = event.get("reaction", "")
+    channel = event["item"]["channel"]
+    message_ts = event["item"]["ts"]
+    user = event["user"]
+    
+    message_key = f"{channel}:{message_ts}"
+    
+    # Check if this message is one of our responses
+    if message_key not in message_question_map:
+        return
+    
+    msg_data = message_question_map[message_key]
+    question = msg_data["question"]
+    result = msg_data["result"]
+    thread_ts = msg_data["thread_ts"]
+    
+    # 📦 Package emoji - Save to cache (for manual cache mode)
+    if reaction == "package" and cache_store:
+        # Only save if not already cached and has tools
+        if not result.from_cache and result.tools_used:
+            cache_id = await cache_store.save(
+                question=question,
+                response_text=result.response_text,
+                tools_used=result.tools_used,
+                sql_queries=result.sql_queries,
+                progress_events=result.progress_events,
+            )
+            if cache_id > 0:
+                logger.info(f"Manual cache save via 📦 reaction: '{question[:50]}...'")
+                # React to confirm
+                await client.reactions_add(
+                    channel=channel,
+                    timestamp=message_ts,
+                    name="white_check_mark",
+                )
+    
+    # 🔄 Refresh emoji - Clear cache and re-run
+    elif reaction == "arrows_counterclockwise" and cache_store:
+        # Delete from cache
+        deleted = await cache_store.delete_by_question(question)
+        
+        if deleted or result.from_cache:
+            logger.info(f"Cache cleared via 🔄 reaction: '{question[:50]}...'")
+            
+            # Post a message that we're re-running
+            await client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text="🔄 *Cache cleared* — running fresh query...",
+            )
+            
+            # Re-run the query
+            asyncio.create_task(
+                _process_and_respond(client, channel, thread_ts, user, question)
+            )
+        else:
+            # Not in cache, just acknowledge
+            await client.reactions_add(
+                channel=channel,
+                timestamp=message_ts,
+                name="x",  # ❌ to indicate nothing to clear
+            )
 
 
 # =============================================================================

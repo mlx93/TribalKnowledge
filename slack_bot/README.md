@@ -9,6 +9,7 @@ A Slack bot that integrates with Company-MCP servers for database schema queries
 - **MCP tool integration** - Schema discovery (synth-mcp) and SQL execution (postgres-mcp)
 - **LLM fallback** - Automatic fallback from Claude to GPT-4o on errors
 - **SQLite persistence** - Thread contexts persist across bot restarts
+- **Query caching** - Cache responses for repeated questions (instant replay)
 
 ## Quick Start
 
@@ -28,11 +29,14 @@ A Slack bot that integrates with Company-MCP servers for database schema queries
    - `chat:write`
    - `channels:history`
    - `groups:history`
+   - `reactions:read` (for cache control)
+   - `reactions:write` (for cache confirmation)
 4. Subscribe to **Events**:
    - `app_mention`
    - `message.channels`
    - `message.groups`
    - `app_home_opened`
+   - `reaction_added` (for cache control via emoji)
 5. Install to workspace → Get Bot Token (`xoxb-...`)
 
 ### 3. Configuration
@@ -113,6 +117,7 @@ slack_bot/
 ├── app.py              # Main Slack Bolt application
 ├── llm_provider.py     # LLM with Claude → GPT-4o fallback
 ├── thread_context.py   # SQLite-backed conversation storage
+├── cache_store.py      # Query response caching
 ├── mcp_client.py       # MCP JSON-RPC client
 ├── message_handler.py  # Agentic loop for tool calls
 ├── requirements.txt    # Python dependencies
@@ -158,6 +163,56 @@ Conversations are persisted per Slack thread in SQLite:
 - **Storage**: `data/thread_contexts.db` (local) or `/data/thread_contexts.db` (Docker)
 - **TTL**: 24 hours (automatic cleanup)
 - **Persistence**: Survives bot restarts
+
+## Query Caching
+
+The bot caches responses to repeated questions for instant replay:
+
+- **Storage**: Same SQLite database as thread contexts (`query_cache` table)
+- **Matching**: Multi-tier matching (hash → exact → fuzzy)
+- **TTL**: 7 days default (configurable)
+- **Replay**: Shows cached progress events for visual continuity
+
+### Cache Modes
+
+**Explicit Mode** (default): Responses are only cached when you react with 📦. This gives you full control over what gets cached.
+
+**Auto-Cache Mode**: Set `CACHE_AUTO_SAVE=true` to automatically cache all successful responses.
+
+### Cache Control via Emoji Reactions
+
+Caching is invisible to users - cached responses look and feel like real queries (progress events replay with realistic timing). Use emoji reactions to control:
+
+| Emoji | Action |
+|-------|--------|
+| 📦 | Save response to cache |
+| 🔄 | Clear from cache and re-run fresh |
+
+**Workflow:**
+1. Ask a question → Bot runs tools and responds
+2. Like the response? React with 📦 (bot confirms with ✅)
+3. Later, same question → Instant replay (looks real)
+4. Response stale? React with 🔄 → Fresh query runs
+
+### Configuration
+
+```bash
+# Cache settings (all optional - defaults shown)
+CACHE_ENABLED=true               # Enable/disable caching
+CACHE_AUTO_SAVE=false            # false = explicit mode (📦 to cache)
+CACHE_TTL_SECONDS=604800         # 7 days
+CACHE_FUZZY_THRESHOLD=0.99       # 99% = essentially exact match only
+```
+
+### Invisible Caching
+
+Cached responses are indistinguishable from fresh ones:
+- Progress events replay with realistic timing
+- Tool usage and SQL queries display the same way
+- No indicators that response came from cache
+
+The only visible feedback:
+- ✅ — Bot confirms when you successfully cache with 📦
 
 ## Development
 

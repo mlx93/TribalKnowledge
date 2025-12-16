@@ -4,11 +4,13 @@ Agentic Message Handler
 Processes Slack messages using an agentic loop with MCP tools.
 
 Flow:
-1. Build LLM messages with system prompt and thread context
-2. Send to LLM with tool definitions
-3. If LLM returns tool_calls, execute via MCP client
-4. Add tool results to messages
-5. Repeat until LLM returns final response (max iterations)
+1. Check cache for matching prior response
+2. If cache miss: Build LLM messages with system prompt and thread context
+3. Send to LLM with tool definitions
+4. If LLM returns tool_calls, execute via MCP client
+5. Add tool results to messages
+6. Repeat until LLM returns final response (max iterations)
+7. Cache the result for future matching
 
 Based on: Company-MCP/frontend/main.py
 """
@@ -21,6 +23,7 @@ from dataclasses import dataclass, field
 from .llm_provider import LLMProvider, LLMResponse
 from .mcp_client import MCPClient, parse_tool_name
 from .thread_context import ThreadContext
+from .cache_store import QueryCacheStore, CachedResponse, CACHE_AUTO_SAVE
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +183,14 @@ class ProcessingResult:
     iterations: int = 0
     error: Optional[str] = None
     sql_queries: List[str] = field(default_factory=list)  # SQL queries executed
+    
+    # Cache-related fields
+    from_cache: bool = False  # Was this response served from cache?
+    cache_id: Optional[int] = None  # ID of the cache entry (if cached)
+    progress_events: List[str] = field(default_factory=list)  # Progress messages for replay
+    
+    # For manual cache mode: store the original question for later caching
+    original_question: Optional[str] = None  # For manual cache approval
 
 
 def format_progress_message(
@@ -213,6 +224,7 @@ async def process_message(
     mcp_client: MCPClient,
     llm_provider: LLMProvider,
     on_progress: Optional[ProgressCallback] = None,
+    cache_store: Optional[QueryCacheStore] = None,
 ) -> ProcessingResult:
     """
     Process a user message through the agentic loop.
@@ -223,10 +235,38 @@ async def process_message(
         mcp_client: MCP client for tool calls
         llm_provider: LLM provider for AI calls
         on_progress: Optional callback for progress updates (receives formatted message)
+        cache_store: Optional cache store for response caching
     
     Returns:
         ProcessingResult with response and metadata
     """
+    # =========================================================================
+    # Check cache first
+    # =========================================================================
+    if cache_store:
+        cached = await cache_store.find_match(user_message)
+        if cached:
+            logger.info(f"Cache hit for: '{user_message[:50]}...' (id={cached.id})")
+            
+            # Add user message to context (for thread continuity)
+            context.add_user_message(user_message)
+            
+            # Add cached assistant response to context
+            context.add_assistant_message(cached.response_text)
+            
+            return ProcessingResult(
+                response_text=cached.response_text,
+                tools_used=cached.tools_used,
+                sql_queries=cached.sql_queries,
+                from_cache=True,
+                cache_id=cached.id,
+                progress_events=cached.progress_events,
+            )
+    
+    # =========================================================================
+    # Cache miss - run the agentic loop
+    # =========================================================================
+    
     # Add user message to context
     context.add_user_message(user_message)
     
@@ -243,6 +283,7 @@ async def process_message(
     tools_used = []
     tools_completed: List[ToolCallInfo] = []
     sql_queries: List[str] = []  # Track SQL queries
+    progress_events: List[str] = []  # Track progress messages for cache replay
     iteration = 0
     used_fallback = False
     actual_model = ""
@@ -307,6 +348,7 @@ async def process_message(
                     if on_progress:
                         progress_msg = format_progress_message([tool_info], tools_completed)
                         await on_progress(progress_msg)
+                        progress_events.append(progress_msg)  # Record for cache replay
                     
                     logger.info(f"Calling tool: {full_name}")
                     
@@ -346,6 +388,7 @@ async def process_message(
                     progress_msg = format_progress_message([], tools_completed)
                     progress_msg += "\n\n💭 _Analyzing results..._"
                     await on_progress(progress_msg)
+                    progress_events.append(progress_msg)  # Record for cache replay
                 
                 # Continue loop to get LLM's response to tool results
                 continue
@@ -356,6 +399,19 @@ async def process_message(
             # Add assistant response to context
             context.add_assistant_message(final_response)
             
+            # =========================================================================
+            # Cache the result for future matching (if auto-save enabled)
+            # =========================================================================
+            cache_id = None
+            if cache_store and tools_used and CACHE_AUTO_SAVE:
+                cache_id = await cache_store.save(
+                    question=user_message,
+                    response_text=final_response,
+                    tools_used=tools_used,
+                    sql_queries=sql_queries,
+                    progress_events=progress_events,
+                )
+            
             return ProcessingResult(
                 response_text=final_response,
                 used_fallback=used_fallback,
@@ -363,6 +419,9 @@ async def process_message(
                 tools_used=tools_used,
                 iterations=iteration,
                 sql_queries=sql_queries,
+                progress_events=progress_events,
+                cache_id=cache_id if cache_id and cache_id > 0 else None,
+                original_question=user_message,  # For manual cache approval
             )
         
         except Exception as e:
@@ -375,6 +434,7 @@ async def process_message(
                 iterations=iteration,
                 error=str(e),
                 sql_queries=sql_queries,
+                progress_events=progress_events,
             )
     
     # Max iterations reached
@@ -386,6 +446,7 @@ async def process_message(
         tools_used=tools_used,
         iterations=iteration,
         sql_queries=sql_queries,
+        progress_events=progress_events,
     )
 
 
