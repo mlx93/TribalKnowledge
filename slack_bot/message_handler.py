@@ -133,6 +133,41 @@ class ToolCallInfo:
     arguments: Dict[str, Any]
     status: str = "calling"  # "calling", "complete", "error"
     result_preview: Optional[str] = None
+    
+    @property
+    def detail(self) -> str:
+        """Get a brief detail about what this tool is doing."""
+        args = self.arguments
+        
+        # SQL execution
+        if "sql" in args:
+            sql = args["sql"]
+            # Extract table name from SQL
+            sql_upper = sql.upper()
+            if "FROM " in sql_upper:
+                # Find table after FROM
+                idx = sql_upper.index("FROM ") + 5
+                rest = sql[idx:].strip().split()[0] if idx < len(sql) else ""
+                table = rest.replace("synthetic.", "").split()[0] if rest else ""
+                return f"`{table}`" if table else ""
+            return "_query_"
+        
+        # Table operations
+        if "table" in args:
+            return f"`{args['table']}`"
+        if "table_name" in args:
+            return f"`{args['table_name']}`"
+        
+        # Search queries
+        if "query" in args:
+            q = args["query"]
+            return f'"{q[:30]}..."' if len(q) > 30 else f'"{q}"'
+        
+        # Limit for list operations
+        if "limit" in args and not args.get("query"):
+            return f"(limit {args['limit']})"
+        
+        return ""
 
 
 @dataclass
@@ -144,35 +179,30 @@ class ProcessingResult:
     tools_used: List[Dict[str, Any]] = field(default_factory=list)
     iterations: int = 0
     error: Optional[str] = None
+    sql_queries: List[str] = field(default_factory=list)  # SQL queries executed
 
 
 def format_progress_message(
     tools_in_progress: List[ToolCallInfo],
     tools_completed: List[ToolCallInfo],
 ) -> str:
-    """Format a progress message showing tool calls."""
+    """Format a progress message showing tool calls with details."""
     lines = ["🤔 *Working on it...*\n"]
     
-    # Show completed tools
+    # Show completed tools with details
     for tool in tools_completed:
+        detail = tool.detail
+        detail_str = f" → {detail}" if detail else ""
         if tool.status == "complete":
-            lines.append(f"✅ `{tool.server}/{tool.tool}`")
+            lines.append(f"✅ `{tool.tool}`{detail_str}")
         else:
-            lines.append(f"❌ `{tool.server}/{tool.tool}` (error)")
+            lines.append(f"❌ `{tool.tool}`{detail_str} (error)")
     
-    # Show in-progress tools
+    # Show in-progress tools with details
     for tool in tools_in_progress:
-        args_preview = ""
-        if tool.arguments:
-            # Show a preview of the arguments
-            if "sql" in tool.arguments:
-                sql = tool.arguments["sql"][:50]
-                args_preview = f" - `{sql}...`"
-            elif "query" in tool.arguments:
-                args_preview = f" - \"{tool.arguments['query']}\""
-            elif "table" in tool.arguments:
-                args_preview = f" - {tool.arguments['table']}"
-        lines.append(f"⏳ `{tool.server}/{tool.tool}`{args_preview}")
+        detail = tool.detail
+        detail_str = f" → {detail}" if detail else ""
+        lines.append(f"⏳ `{tool.tool}`{detail_str}")
     
     return "\n".join(lines)
 
@@ -212,6 +242,7 @@ async def process_message(
     
     tools_used = []
     tools_completed: List[ToolCallInfo] = []
+    sql_queries: List[str] = []  # Track SQL queries
     iteration = 0
     used_fallback = False
     actual_model = ""
@@ -289,12 +320,17 @@ async def process_message(
                     
                     tools_completed.append(tool_info)
                     
-                    # Record tool usage
+                    # Record tool usage with detail
                     tools_used.append({
                         "server": server_id,
                         "tool": tool_name,
                         "arguments": arguments,
+                        "detail": tool_info.detail,
                     })
+                    
+                    # Track SQL queries
+                    if "sql" in arguments:
+                        sql_queries.append(arguments["sql"])
                     
                     # Add tool result to messages
                     result_str = json.dumps(tool_result, default=str)
@@ -326,6 +362,7 @@ async def process_message(
                 actual_model=actual_model,
                 tools_used=tools_used,
                 iterations=iteration,
+                sql_queries=sql_queries,
             )
         
         except Exception as e:
@@ -337,6 +374,7 @@ async def process_message(
                 tools_used=tools_used,
                 iterations=iteration,
                 error=str(e),
+                sql_queries=sql_queries,
             )
     
     # Max iterations reached
@@ -347,6 +385,7 @@ async def process_message(
         actual_model=actual_model,
         tools_used=tools_used,
         iterations=iteration,
+        sql_queries=sql_queries,
     )
 
 
@@ -366,23 +405,22 @@ def format_response_for_slack(
     """
     blocks = []
     
-    # Add tool usage summary at the TOP (collapsed view)
+    # Add tool usage summary at the TOP with details
     if show_metadata and result.tools_used:
-        # Group tools by server
-        tools_by_server: Dict[str, List[str]] = {}
+        # Create detailed tool summary
+        tool_lines = []
         for t in result.tools_used:
-            server = t['server']
-            if server not in tools_by_server:
-                tools_by_server[server] = []
-            tools_by_server[server].append(t['tool'])
+            detail = t.get('detail', '')
+            if detail:
+                tool_lines.append(f"`{t['tool']}` → {detail}")
+            else:
+                tool_lines.append(f"`{t['tool']}`")
         
-        # Format as compact summary
-        tool_parts = []
-        for server, tools in tools_by_server.items():
-            tool_names = ", ".join(tools)
-            tool_parts.append(f"*{server}*: {tool_names}")
-        
-        tools_text = " │ ".join(tool_parts)
+        # Combine into compact format (max 10 shown)
+        if len(tool_lines) > 10:
+            tools_text = " • ".join(tool_lines[:10]) + f" _(+{len(tool_lines)-10} more)_"
+        else:
+            tools_text = " • ".join(tool_lines)
         
         blocks.append({
             "type": "context",
@@ -395,6 +433,33 @@ def format_response_for_slack(
     # Process the response text to create proper blocks
     response_blocks = _create_response_blocks(result.response_text)
     blocks.extend(response_blocks)
+    
+    # Add SQL query block if any queries were executed
+    if result.sql_queries:
+        blocks.append({"type": "divider"})
+        
+        # Show the last (most relevant) SQL query
+        final_sql = result.sql_queries[-1]
+        
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": "📝 *SQL Query Executed:*"}
+            ]
+        })
+        
+        # Format SQL nicely
+        blocks.append({
+            "type": "rich_text",
+            "elements": [
+                {
+                    "type": "rich_text_preformatted",
+                    "elements": [
+                        {"type": "text", "text": final_sql[:2000]}  # Slack limit
+                    ]
+                }
+            ]
+        })
     
     # Add fallback model warning if used
     if result.used_fallback:
