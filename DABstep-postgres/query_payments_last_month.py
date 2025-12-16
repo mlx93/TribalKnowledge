@@ -64,10 +64,10 @@ def count_payments_last_month():
             if stats:
                 total_count, total_volume, avg_amount, earliest, latest = stats
                 print(f"\n📈 Additional Statistics:")
-                print(f"   Total transaction volume: ${total_volume:,.2f}" if total_volume else "   Total transaction volume: N/A")
-                print(f"   Average transaction amount: ${avg_amount:,.2f}" if avg_amount else "   Average transaction amount: N/A")
-                print(f"   Earliest payment: {earliest}" if earliest else "   Earliest payment: N/A")
-                print(f"   Latest payment: {latest}" if latest else "   Latest payment: N/A")
+                print(f"   Total transaction volume: ${total_volume:,.2f}" if total_volume is not None else "   Total transaction volume: N/A")
+                print(f"   Average transaction amount: ${avg_amount:,.2f}" if avg_amount is not None else "   Average transaction amount: N/A")
+                print(f"   Earliest payment: {earliest}" if earliest is not None else "   Earliest payment: N/A")
+                print(f"   Latest payment: {latest}" if latest is not None else "   Latest payment: N/A")
         
         conn.close()
         return count
@@ -81,3 +81,4 @@ def count_payments_last_month():
 
 if __name__ == '__main__':
     count_payments_last_month()
+

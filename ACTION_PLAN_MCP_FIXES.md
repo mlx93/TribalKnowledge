@@ -83,18 +83,27 @@ export async function getColumnUsage(
   columnName: string,
   database?: string
 ) {
-  // Query all tables with this column
-  const query = `
+  // Query all tables with this column using parameterized queries
+  // to prevent SQL injection
+  const params: string[] = [`%${columnName}%`];
+  
+  let query = `
     SELECT DISTINCT
       database_name,
       schema_name,
       table_name,
       doc_type
     FROM documents
-    WHERE content LIKE '%${columnName}%'
+    WHERE content LIKE ?
       AND doc_type IN ('table', 'column')
-      ${database ? `AND database_name = '${database}'` : ''}
   `;
+  
+  if (database) {
+    query += ` AND database_name = ?`;
+    params.push(database);
+  }
+  
+  const results = db.prepare(query).all(...params);
   
   // Build relationship map
   // Find common join patterns

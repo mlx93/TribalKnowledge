@@ -2,16 +2,37 @@
 
 ## Overview
 
-Build a Slack bot that integrates with the Company-MCP server, reusing the existing `chatbot/ai_agent.py` architecture from the `chatbot_UI` branch. The bot will handle natural language questions about database schemas and execute SQL queries, returning results directly in Slack threads.
+Build a Slack bot that integrates with the Company-MCP servers via HTTP JSON-RPC. The bot lives in the Tribal_Knowledge repo and calls MCP servers remotely - no code sharing required. All tool calls (schema queries AND SQL execution) go through MCP's HTTP API.
 
 ## Current State Analysis
 
-### Existing Components to Reuse
+### Architecture Decision: Option A - Pure MCP HTTP Client
 
-1. **chatbot_UI branch** (`https://github.com/nstjuliana/company-mcp`):
-   - `chatbot/ai_agent.py` - AI agent with 8 tools, Claude via OpenRouter, 100K token budget
-   - `sql_service.py` - SQL generation (LLM) + execution (PostgreSQL/Snowflake)
-   - `server.py` - FastMCP server with 14 schema search tools
+Based on research of the Company-MCP master branch (`frontend/main.py`), we're using the same architecture as the web UI:
+- All tool calls go through MCP servers via HTTP JSON-RPC
+- SQL execution via `postgres-mcp` server's `execute_query` tool
+- Schema context via `mcp-synth` / `mcp-dabstep` servers
+- No direct import of `sql_service.py` needed
+
+#### Why Option A over Option B (chatbot_UI branch approach)?
+
+| Aspect | Option A: MCP HTTP (chosen) | Option B: Direct sql_service.py |
+|--------|-----------------------------|---------------------------------|
+| **Architecture** | Pure microservices | Hybrid (MCP schema + direct SQL) |
+| **Code Sharing** | None required | Must import sql_service.py |
+| **SQL Execution** | Via `postgres-mcp__execute_query` | Direct function call |
+| **Maintenance** | Changes to MCP auto-available | Must sync sql_service.py |
+| **Security** | Same boundaries as web UI | New trust boundary |
+| **Complexity** | Simpler, HTTP-only | More complex, mixed |
+
+The `chatbot_UI` branch's `chatbot/ai_agent.py` imports `sql_service.py` directly for SQL execution, while MCP is only used for schema context. The master branch's `frontend/main.py` routes ALL operations through MCP HTTP, which is cleaner and what we're following.
+
+### Existing Components
+
+1. **Company-MCP master branch** (remote, called via HTTP):
+   - `server.py` - Schema context MCP server (15 tools: search_tables, get_table_schema, etc.)
+   - `postgres-mcp/server.py` - SQL execution MCP server (9 tools: execute_query, describe_table, etc.)
+   - `frontend/main.py` - Reference implementation of MCP client + agentic loop
 
 2. **TribalAgent fallback logic** (`TribalAgent/src/utils/llm.ts:707-939`):
    - 402 errors → immediate fallback to GPT-4o
@@ -22,26 +43,73 @@ Build a Slack bot that integrates with the Company-MCP server, reusing the exist
 
 - Slack Bolt requires acknowledgment within 3 seconds → must use `asyncio.create_task()` for LLM calls
 - Thread context tracked via `thread_ts` field (unique per thread, not per channel)
-- chatbot_UI uses MCP for schema queries, sql_service.py for SQL execution
-- Dependencies needed: `slack-bolt`, `aiosqlite` (for thread context persistence)
+- MCP uses JSON-RPC over HTTP with session-based protocol
+- Tool naming convention: `{server_id}__{tool_name}` (e.g., `postgres-mcp__execute_query`)
+- Dependencies needed: `slack-bolt`, `aiosqlite`, `httpx` (for async HTTP)
+
+### MCP HTTP API Contract
+
+All MCP servers expose a `/mcp` endpoint using JSON-RPC over HTTP with SSE responses:
+
+**Step 1 - Initialize Session:**
+```json
+POST {server_url}/mcp
+Headers: Content-Type: application/json, Accept: application/json, text/event-stream
+
+{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+ "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "SlackBot", "version": "1.0.0"}}}
+```
+Response: Session ID in `mcp-session-id` header
+
+**Step 2 - List Tools:**
+```json
+POST {server_url}/mcp
+Headers: mcp-session-id: {session_id}
+
+{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+```
+
+**Step 3 - Call Tool:**
+```json
+POST {server_url}/mcp
+Headers: mcp-session-id: {session_id}
+
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+ "params": {"name": "execute_query", "arguments": {"sql": "SELECT...", "limit": 100}}}
+```
+
+**Response Format (SSE):**
+```
+data: {"jsonrpc": "2.0", "id": 3, "result": {...}}
+```
+
+### SQL Execution Security (postgres-mcp)
+
+The `postgres-mcp` server enforces read-only access:
+- **Allowed statements**: `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, `TABLE`
+- **Forbidden**: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `TRUNCATE`, etc.
+- **Query timeout**: 30 seconds
+- **Row limit**: 1000 rows maximum (configurable via `limit` parameter)
 
 ## Desired End State
 
-A containerized Slack bot service that:
+A Slack bot service (in Tribal_Knowledge repo) that:
 1. Responds to @mentions in any channel/thread
 2. Maintains conversation context per Slack thread (persisted in SQLite)
-3. Queries database schemas via MCP tools
-4. Executes SQL queries via sql_service.py and returns results
-5. Falls back from OpenRouter (Claude) to OpenAI (GPT-4o) on failures
-6. Runs alongside existing docker-compose services
+3. Calls Company-MCP servers via HTTP for all tool operations:
+   - Schema queries via `mcp-synth` / `mcp-dabstep` servers
+   - SQL execution via `postgres-mcp` server's `execute_query` tool
+4. Falls back from OpenRouter (Claude) to OpenAI (GPT-4o) on failures
+5. Runs standalone (requires Company-MCP servers to be accessible)
 
 ### Verification
 
 - Bot responds to @mentions with "thinking" indicator within 3 seconds
 - Follow-up questions in same thread have conversation context
-- SQL queries execute and return formatted results
+- MCP tool calls return results (schema searches, SQL execution)
 - 402 errors trigger immediate fallback (visible in logs)
-- Container restarts preserve thread context
+- Bot restarts preserve thread context (SQLite persistence)
 
 ## What We're NOT Doing
 
@@ -54,62 +122,87 @@ A containerized Slack bot service that:
 
 ## Implementation Approach
 
-The Slack bot will be a new Python service that:
+The Slack bot will be a standalone Python service in the Tribal_Knowledge repo that:
 1. Uses Slack Bolt AsyncApp with Socket Mode for event handling
-2. Imports and wraps existing `ai_agent.py` logic (not duplicating)
+2. Calls Company-MCP servers via HTTP JSON-RPC (no code sharing)
 3. Adds a Python port of the TribalAgent LLM fallback pattern
 4. Stores thread context in SQLite for persistence
-5. Deploys as a 4th container in docker-compose
+5. Runs standalone or via Docker
 
 ## Phase 1: Project Structure and Dependencies
 
 ### Overview
-Set up the Slack bot directory structure within company-mcp repository and add required dependencies.
+Set up the Slack bot directory structure in the Tribal_Knowledge repository.
+
+### Prerequisites
+
+Before starting, verify the Company-MCP servers are running and accessible. The Slack bot depends on:
+
+| Server | Default URL | Tools | Purpose |
+|--------|-------------|-------|---------|
+| `synth-mcp` | `http://localhost:8001` | 15 | Schema context and search |
+| `postgres-mcp` | `http://localhost:8002` | 9 | SQL execution (read-only) |
+
+**Quick verification (run from terminal):**
+
+```bash
+# Test synth-mcp server
+curl -s http://localhost:8001/mcp -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+
+# Test postgres-mcp server
+curl -s http://localhost:8002/mcp -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
+```
+
+**Expected response:** JSON with `"result"` containing server capabilities. If you get connection refused or timeout, start the Company-MCP services first (see Company-MCP README).
 
 ### Changes Required
 
 #### 1.1 Create Slack Bot Directory Structure
 
-**Directory**: `slack_bot/` (new directory in company-mcp root)
+**Directory**: `Tribal_Knowledge/slack_bot/` (new directory)
 
 ```
-company-mcp/
+Tribal_Knowledge/
 ├── slack_bot/
 │   ├── __init__.py
 │   ├── app.py              # Main Slack Bolt application
 │   ├── llm_provider.py     # LLM with fallback logic (port from TribalAgent)
 │   ├── thread_context.py   # SQLite-backed thread context storage
-│   ├── mcp_client.py       # MCP client - fetches tools dynamically from server
-│   ├── message_handler.py  # Message processing with MCP + sql_service
+│   ├── mcp_client.py       # MCP JSON-RPC client (based on frontend/main.py)
+│   ├── message_handler.py  # Agentic loop - all tools via MCP HTTP
+│   ├── requirements.txt    # Slack bot specific dependencies
 │   └── Dockerfile
-├── chatbot/                # Existing
-├── sql_service.py          # Existing (will import)
-├── server.py               # Existing MCP server
-└── docker-compose.yml      # Will modify
+├── TribalAgent/            # Existing - reference for fallback logic
+└── thoughts/               # Existing - plans and research
 ```
 
-#### 1.2 Update requirements.txt
+**Note**: No dependency on company-mcp code. All MCP communication via HTTP.
 
-**File**: `requirements.txt`
-**Changes**: Add Slack and async SQLite dependencies
+#### 1.2 Create requirements.txt
+
+**File**: `slack_bot/requirements.txt`
 
 ```
-# Existing dependencies...
-fastmcp==2.13.3
-sqlite-vec>=0.1.1
-openai>=1.0.0
-python-dotenv>=1.0.0
-paramiko>=3.4.0
-flask>=2.3.0
-flask-cors>=4.0.0
-requests>=2.31.0
-psycopg2-binary>=2.9.0
-snowflake-connector-python>=3.0.0
+# Slack Bot Dependencies (standalone - no company-mcp imports)
 
-# New Slack bot dependencies
+# Slack
 slack-bolt>=1.18.0
+
+# Async HTTP client for MCP JSON-RPC calls
+httpx>=0.26.0
+
+# LLM providers
+openai>=1.0.0
+
+# Thread context persistence
 aiosqlite>=0.19.0
-aiohttp>=3.9.0
+
+# Environment variables
+python-dotenv>=1.0.0
 ```
 
 #### 1.3 Create slack_bot/__init__.py
@@ -175,6 +268,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 class LLMResponse(TypedDict):
     content: str
+    tool_calls: list[dict]  # OpenAI tool_calls from response, empty if none
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
@@ -331,13 +425,30 @@ async def call_llm_with_fallback(
 
                 response = await client.chat.completions.create(**kwargs)
 
-                content = response.choices[0].message.content or ""
+                message = response.choices[0].message
+                content = message.content or ""
                 usage = response.usage
 
-                logger.debug(f"LLM call successful, response length: {len(content)}")
+                # Extract tool_calls if present
+                tool_calls = []
+                if message.tool_calls:
+                    tool_calls = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
+
+                logger.debug(f"LLM call successful, response length: {len(content)}, tool_calls: {len(tool_calls)}")
 
                 return LLMResponse(
                     content=content,
+                    tool_calls=tool_calls,
                     prompt_tokens=usage.prompt_tokens if usage else 0,
                     completion_tokens=usage.completion_tokens if usage else 0,
                     total_tokens=usage.total_tokens if usage else 0,
@@ -380,16 +491,33 @@ async def call_llm_with_fallback(
 
             response = await client.chat.completions.create(**kwargs)
 
-            content = response.choices[0].message.content or ""
+            message = response.choices[0].message
+            content = message.content or ""
             usage = response.usage
+
+            # Extract tool_calls if present
+            tool_calls = []
+            if message.tool_calls:
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    }
+                    for tc in message.tool_calls
+                ]
 
             logger.info(
                 f"Fallback to {fallback_model} succeeded! "
-                f"Response length: {len(content)} chars"
+                f"Response length: {len(content)} chars, tool_calls: {len(tool_calls)}"
             )
 
             return LLMResponse(
                 content=content,
+                tool_calls=tool_calls,
                 prompt_tokens=usage.prompt_tokens if usage else 0,
                 completion_tokens=usage.completion_tokens if usage else 0,
                 total_tokens=usage.total_tokens if usage else 0,
@@ -750,61 +878,227 @@ Create the message handler that connects to the MCP server to dynamically fetch 
 """
 MCP Client
 
-Connects to the Company-MCP server and provides access to its tools.
-Tools are fetched dynamically from the server, not hardcoded.
+JSON-RPC client for Company-MCP servers.
+Based on frontend/main.py:541-619 from company-mcp master branch.
+
+Protocol:
+1. Initialize session → get mcp-session-id header
+2. List tools → get available tools with schemas
+3. Call tool → execute tool with arguments
+
+Supports multiple MCP servers with tool namespacing: {server_id}__{tool_name}
+
+Session Management:
+- Sessions are reused within the same Slack thread (same MCPClient instance)
+- New Slack messages create new MCPClient instances (fresh sessions)
+- This balances efficiency with isolation
 """
 
 import os
 import json
 import logging
-import aiohttp
+import asyncio
 from typing import Optional
+from dataclasses import dataclass
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://localhost:8000")
+
+@dataclass
+class MCPServer:
+    """Configuration for an MCP server."""
+    id: str
+    url: str
+    name: str
+
+
+def normalize_mcp_url(url: str) -> str:
+    """
+    Normalize MCP server URL for Docker networking.
+
+    Based on frontend/main.py - handles Docker internal hostnames.
+    Converts localhost URLs to host.docker.internal when running in Docker.
+    """
+    # Check if we're running in Docker (common indicator)
+    in_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER')
+
+    if in_docker and 'localhost' in url:
+        return url.replace('localhost', 'host.docker.internal')
+
+    return url
+
+
+# Default MCP server configurations
+DEFAULT_SERVERS = [
+    MCPServer(
+        id="synth-mcp",
+        url=os.environ.get("MCP_SYNTH_URL", "http://localhost:8001"),
+        name="Schema Context (Synthetic)"
+    ),
+    MCPServer(
+        id="postgres-mcp",
+        url=os.environ.get("MCP_POSTGRES_URL", "http://localhost:8002"),
+        name="PostgreSQL Execution (Read-Only)"
+    ),
+]
+
+
+def parse_sse_response(text: str) -> dict:
+    """
+    Parse SSE response from MCP server.
+
+    SSE format: 'data: {"jsonrpc": "2.0", ...}'
+    """
+    for line in text.strip().split("\n"):
+        if line.startswith("data:"):
+            json_str = line[5:].strip()
+            if json_str:
+                return json.loads(json_str)
+    # Fallback: try parsing entire response as JSON
+    return json.loads(text)
 
 
 class MCPClient:
     """
-    Client for connecting to Company-MCP server.
+    Client for connecting to multiple Company-MCP servers.
 
-    Fetches tool definitions dynamically and executes tool calls.
+    Fetches tool definitions dynamically and executes tool calls via JSON-RPC.
+    Tools are namespaced as {server_id}__{tool_name}.
+
+    Session Management:
+    - Sessions are cached per server and reused within the client lifetime
+    - Create a new MCPClient instance for each new Slack message
+    - Sessions persist across tool calls within the same message processing
     """
 
-    def __init__(self, server_url: str = MCP_SERVER_URL):
-        self.server_url = server_url.rstrip("/")
-        self._tools: Optional[list[dict]] = None
-        self._tools_for_llm: Optional[list[dict]] = None
+    def __init__(self, servers: list[MCPServer] = None):
+        self.servers = servers or DEFAULT_SERVERS
+        self._tools_cache: dict[str, list[dict]] = {}  # server_id -> tools
+        self._session_cache: dict[str, str] = {}  # server_id -> session_id (reused within thread)
+        self._all_tools_for_llm: Optional[list[dict]] = None
+        self._http_client: Optional[httpx.AsyncClient] = None
 
-    async def get_tools(self) -> list[dict]:
-        """
-        Fetch available tools from MCP server.
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create HTTP client."""
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=60.0)
+        return self._http_client
 
-        Returns the raw MCP tool definitions.
+    async def close(self):
+        """Close HTTP client."""
+        if self._http_client:
+            await self._http_client.aclose()
+            self._http_client = None
+
+    async def _get_session(self, server: MCPServer) -> Optional[str]:
         """
-        if self._tools is not None:
-            return self._tools
+        Get or create MCP session with server.
+
+        Sessions are cached and reused within the same MCPClient instance.
+        Returns session ID from mcp-session-id header.
+        """
+        # Return cached session if available
+        if server.id in self._session_cache:
+            return self._session_cache[server.id]
+
+        client = await self._get_client()
+        # Normalize URL for Docker networking
+        normalized_url = normalize_mcp_url(server.url)
+        mcp_endpoint = f"{normalized_url.rstrip('/')}/mcp"
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "TribalKnowledge-SlackBot", "version": "1.0.0"}
+            }
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream"
+        }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                # MCP servers expose tools at /mcp or via SSE
-                # FastMCP exposes a tools list endpoint
-                async with session.get(
-                    f"{self.server_url}/tools",
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        self._tools = data.get("tools", data)
-                        logger.info(f"Loaded {len(self._tools)} tools from MCP server")
-                        return self._tools
-                    else:
-                        logger.error(f"Failed to fetch tools: {response.status}")
-                        return []
+            response = await client.post(mcp_endpoint, json=payload, headers=headers)
+            if response.status_code == 200:
+                session_id = response.headers.get("mcp-session-id")
+                if session_id:
+                    self._session_cache[server.id] = session_id
+                    logger.debug(f"Created new session for {server.id}: {session_id[:8]}...")
+                return session_id
+            else:
+                logger.error(f"Failed to init session with {server.id}: {response.status_code}")
+                return None
         except Exception as e:
-            logger.error(f"Error fetching MCP tools: {e}")
+            logger.error(f"Error initializing session with {server.id}: {e}")
+            return None
+
+    async def fetch_tools_from_server(self, server: MCPServer) -> list[dict]:
+        """
+        Fetch tools from a single MCP server.
+
+        Returns list of tool definitions with server_id prefix.
+        """
+        if server.id in self._tools_cache:
+            return self._tools_cache[server.id]
+
+        session_id = await self._get_session(server)
+        if not session_id:
+            logger.warning(f"Could not get session for {server.id}, skipping")
             return []
+
+        client = await self._get_client()
+        normalized_url = normalize_mcp_url(server.url)
+        mcp_endpoint = f"{normalized_url.rstrip('/')}/mcp"
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "mcp-session-id": session_id
+        }
+
+        try:
+            response = await client.post(mcp_endpoint, json=payload, headers=headers)
+            if response.status_code == 200:
+                data = parse_sse_response(response.text)
+                tools = data.get("result", {}).get("tools", [])
+
+                # Add server_id prefix to tool names
+                for tool in tools:
+                    tool["_server_id"] = server.id
+                    tool["_original_name"] = tool["name"]
+                    tool["name"] = f"{server.id}__{tool['name']}"
+
+                self._tools_cache[server.id] = tools
+                logger.info(f"Loaded {len(tools)} tools from {server.id}")
+                return tools
+            else:
+                logger.error(f"Failed to fetch tools from {server.id}: {response.status_code}")
+                return []
+        except Exception as e:
+            logger.error(f"Error fetching tools from {server.id}: {e}")
+            return []
+
+    async def get_all_tools(self) -> list[dict]:
+        """Fetch tools from all configured MCP servers."""
+        all_tools = []
+        for server in self.servers:
+            tools = await self.fetch_tools_from_server(server)
+            all_tools.extend(tools)
+        return all_tools
 
     async def get_tools_for_llm(self) -> list[dict]:
         """
@@ -812,90 +1106,111 @@ class MCPClient:
 
         Converts MCP tool schema to OpenAI tools format.
         """
-        if self._tools_for_llm is not None:
-            return self._tools_for_llm
+        if self._all_tools_for_llm is not None:
+            return self._all_tools_for_llm
 
-        mcp_tools = await self.get_tools()
+        mcp_tools = await self.get_all_tools()
 
-        self._tools_for_llm = []
+        self._all_tools_for_llm = []
         for tool in mcp_tools:
-            # MCP tools have: name, description, inputSchema
-            # OpenAI wants: type="function", function={name, description, parameters}
-            self._tools_for_llm.append({
+            self._all_tools_for_llm.append({
                 "type": "function",
                 "function": {
-                    "name": tool.get("name"),
+                    "name": tool["name"],  # Already prefixed with server_id__
                     "description": tool.get("description", ""),
                     "parameters": tool.get("inputSchema", {"type": "object", "properties": {}})
                 }
             })
 
-        return self._tools_for_llm
+        logger.info(f"Prepared {len(self._all_tools_for_llm)} tools for LLM")
+        return self._all_tools_for_llm
 
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
         """
-        Execute a tool on the MCP server.
+        Execute a tool on the appropriate MCP server.
 
-        Args:
-            tool_name: Name of the tool to call
-            arguments: Tool arguments as a dict
-
-        Returns:
-            Tool result as a string
+        Tool name format: {server_id}__{tool_name}
         """
-        logger.info(f"Calling MCP tool: {tool_name} with args: {arguments}")
+        logger.info(f"Calling MCP tool: {tool_name}")
+
+        # Parse server_id from tool name
+        if "__" not in tool_name:
+            return f"Error: Invalid tool name format. Expected 'server_id__tool_name', got '{tool_name}'"
+
+        server_id, original_tool_name = tool_name.split("__", 1)
+
+        # Find server
+        server = next((s for s in self.servers if s.id == server_id), None)
+        if not server:
+            return f"Error: Unknown server '{server_id}'"
+
+        # Get session (reuses cached session if available)
+        session_id = await self._get_session(server)
+        if not session_id:
+            return f"Error: Could not connect to {server_id}"
+
+        client = await self._get_client()
+        normalized_url = normalize_mcp_url(server.url)
+        mcp_endpoint = f"{normalized_url.rstrip('/')}/mcp"
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": original_tool_name,  # Use original name without prefix
+                "arguments": arguments
+            }
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "mcp-session-id": session_id
+        }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.server_url}/tools/{tool_name}",
-                    json=arguments,
-                    headers={"Content-Type": "application/json"},
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        # Format result for readability
-                        if isinstance(result, dict):
-                            return json.dumps(result, indent=2)
-                        return str(result)
-                    else:
-                        error = await response.text()
-                        logger.error(f"MCP tool error: {response.status} - {error}")
-                        return f"Error ({response.status}): {error}"
+            response = await client.post(mcp_endpoint, json=payload, headers=headers)
+            if response.status_code == 200:
+                data = parse_sse_response(response.text)
+
+                if "error" in data:
+                    return f"Error: {data['error'].get('message', 'Unknown error')}"
+
+                result = data.get("result", {})
+                content = result.get("content", [])
+
+                # Extract text from content blocks
+                text_parts = []
+                for block in content:
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+
+                return "\n".join(text_parts) if text_parts else json.dumps(result, indent=2)
+            else:
+                return f"Error ({response.status_code}): {response.text[:200]}"
+
         except asyncio.TimeoutError:
-            logger.error(f"MCP tool call timed out: {tool_name}")
             return f"Error: Tool call timed out after 60 seconds"
         except Exception as e:
             logger.error(f"MCP tool call failed: {e}")
             return f"Error calling {tool_name}: {str(e)}"
 
-    async def health_check(self) -> bool:
-        """Check if MCP server is healthy."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.server_url}/health",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
-                    return response.status == 200
-        except Exception:
-            return False
+
+# Note: MCPClient instances should be created per-message, not globally
+# This ensures fresh sessions for each new Slack message while reusing
+# sessions within the same message's agentic loop.
+#
+# Usage in message_handler.py:
+#   mcp_client = MCPClient()  # Fresh client per message
+#   tools = await mcp_client.get_tools_for_llm()
+#   result = await mcp_client.call_tool(...)
+#   await mcp_client.close()  # Clean up when done
 
 
-# Global client instance
-_client: Optional[MCPClient] = None
-
-
-def get_mcp_client() -> MCPClient:
-    """Get the global MCP client instance."""
-    global _client
-    if _client is None:
-        _client = MCPClient()
-    return _client
-
-
-import asyncio  # Add at top
+def create_mcp_client() -> MCPClient:
+    """Create a new MCP client instance for processing a message."""
+    return MCPClient()
 ```
 
 #### 4.2 Create Message Handler Module
@@ -907,151 +1222,51 @@ import asyncio  # Add at top
 Message Handler
 
 Processes Slack messages using:
-- MCP server tools (dynamically fetched) for schema queries
-- sql_service.py for SQL execution
+- MCP server tools (dynamically fetched) for ALL operations
 - LLM with fallback for orchestration
+
+All tool calls go through MCP HTTP API:
+- Schema tools via synth-mcp (all 15 tools available)
+- SQL execution via postgres-mcp (all 9 tools available, read-only)
 """
 
-import os
-import sys
 import json
 import logging
 import asyncio
-from typing import Optional
-
-# Add parent directory to path to import from company-mcp root
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from slack_bot.llm_provider import call_llm_with_fallback, get_fallback_status
 from slack_bot.thread_context import ThreadContext, get_store
-from slack_bot.mcp_client import get_mcp_client
+from slack_bot.mcp_client import create_mcp_client
 
 logger = logging.getLogger(__name__)
-
-# Import sql_service for SQL execution
-try:
-    from sql_service import generate_and_execute_sql, SQLSecurityValidator
-    SQL_SERVICE_AVAILABLE = True
-    logger.info("sql_service loaded successfully")
-except ImportError as e:
-    logger.warning(f"sql_service not available - SQL execution disabled: {e}")
-    SQL_SERVICE_AVAILABLE = False
 
 # System prompt for the Slack bot
 SYSTEM_PROMPT = """You are a helpful database documentation assistant for the Tribal Knowledge team.
 You help users understand database schemas, find tables, and answer questions about data.
 
-You have access to tools from the MCP server that let you:
-- Search for tables and schemas
-- Get table details and column information
-- Look up domain/business context
-- Execute SQL queries (SELECT only)
+You have access to ALL tools from two MCP servers (tools are prefixed with server name):
 
-When users ask about data or want to query databases:
-1. First understand what they're looking for
-2. Use the search tools to find relevant tables and schemas
-3. If they want specific data, use the data_question or SQL tools
-4. Present results in a clear, formatted way
+**synth-mcp** (Schema Context - 15 tools):
+Tools for searching and exploring database schema documentation.
+Examples: synth-mcp__search_tables, synth-mcp__get_table_schema, synth-mcp__search_fts,
+synth-mcp__search_vector, synth-mcp__list_columns, synth-mcp__list_domains, etc.
+
+**postgres-mcp** (SQL Execution - 9 tools, READ-ONLY):
+Tools for executing queries and exploring live database.
+Examples: postgres-mcp__execute_query, postgres-mcp__describe_table,
+postgres-mcp__get_sample_data, postgres-mcp__list_tables, etc.
+NOTE: Only SELECT queries are allowed - no INSERT, UPDATE, DELETE, etc.
+
+Workflow for data questions:
+1. Use synth-mcp tools to understand the schema (search_tables, get_table_schema)
+2. Write SQL based on what you learned
+3. Use postgres-mcp__execute_query to run your SQL
 
 Always cite which tables/columns you found information from.
 Format results as Slack-friendly text (use code blocks for SQL and data).
 
 For follow-up questions, use the conversation context to understand references.
 """
-
-
-def format_sql_result(result: dict) -> str:
-    """Format SQL query result for Slack display."""
-    if "error" in result:
-        return f":x: Error: {result['error']}"
-
-    sql = result.get("sql", "")
-    rows = result.get("rows", [])
-    row_count = result.get("row_count", len(rows))
-
-    output = []
-
-    if sql:
-        output.append(f"```sql\n{sql}\n```")
-
-    if rows:
-        # Format as simple table for Slack
-        if row_count <= 20:
-            output.append(f"*Results ({row_count} rows):*")
-            output.append("```")
-
-            if rows:
-                headers = list(rows[0].keys())
-                output.append(" | ".join(headers))
-                output.append("-" * 50)
-
-                for row in rows:
-                    values = [str(v)[:30] for v in row.values()]
-                    output.append(" | ".join(values))
-
-            output.append("```")
-        else:
-            output.append(f"*Results: {row_count} rows (showing first 10):*")
-            output.append("```")
-
-            headers = list(rows[0].keys())
-            output.append(" | ".join(headers))
-            output.append("-" * 50)
-
-            for row in rows[:10]:
-                values = [str(v)[:30] for v in row.values()]
-                output.append(" | ".join(values))
-
-            output.append("```")
-            output.append(f"_...and {row_count - 10} more rows_")
-
-    return "\n".join(output)
-
-
-async def execute_tool(tool_name: str, arguments: dict) -> str:
-    """
-    Execute a tool call and return the result.
-
-    Routes to either:
-    - MCP server (for schema/search tools)
-    - sql_service (for SQL execution)
-    """
-    logger.info(f"Executing tool: {tool_name}")
-
-    # Special handling for SQL-related tools that need sql_service
-    if tool_name in ["execute_sql", "run_sql"] and SQL_SERVICE_AVAILABLE:
-        query = arguments.get("query", "")
-        database = arguments.get("database", "postgres_production")
-
-        # Validate query is SELECT only
-        validator = SQLSecurityValidator()
-        is_valid, error = validator.validate(query)
-        if not is_valid:
-            return f":x: Security Error: {error}"
-
-        # Execute query
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: generate_and_execute_sql(query, database, execute_only=True)
-        )
-        return format_sql_result(result)
-
-    # For data_question tool, use sql_service to generate + execute
-    if tool_name == "data_question" and SQL_SERVICE_AVAILABLE:
-        question = arguments.get("question", "")
-        database = arguments.get("database", "postgres_production")
-
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: generate_and_execute_sql(question, database)
-        )
-        return format_sql_result(result)
-
-    # All other tools go to MCP server
-    mcp_client = get_mcp_client()
-    return await mcp_client.call_tool(tool_name, arguments)
 
 
 async def process_message(
@@ -1068,6 +1283,10 @@ async def process_message(
     2. If LLM calls tools, execute them and continue
     3. Repeat until LLM returns final response
 
+    Session Management:
+    - Creates a fresh MCP client per message (new sessions)
+    - Sessions are reused across tool calls within the same message
+
     Args:
         user_message: The user's message text
         context: Thread context with conversation history
@@ -1080,82 +1299,90 @@ async def process_message(
     # Add user message to context
     context.add_message("user", user_message, message_ts, user_id)
 
-    # Get tools from MCP server (dynamically)
-    mcp_client = get_mcp_client()
-    tools = await mcp_client.get_tools_for_llm()
+    # Create fresh MCP client for this message (new sessions)
+    # Sessions are reused within the agentic loop for efficiency
+    mcp_client = create_mcp_client()
 
-    if not tools:
-        logger.warning("No tools available from MCP server")
-    else:
-        logger.info(f"Using {len(tools)} tools from MCP server")
+    try:
+        # Get tools from MCP server (dynamically)
+        tools = await mcp_client.get_tools_for_llm()
 
-    # Build messages for LLM
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        *context.to_llm_messages()
-    ]
+        if not tools:
+            logger.warning("No tools available from MCP server")
+        else:
+            logger.info(f"Using {len(tools)} tools from MCP server")
 
-    # Agentic loop
-    max_iterations = 10  # Prevent infinite loops
-    used_fallback = False
+        # Build messages for LLM
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *context.to_llm_messages()
+        ]
 
-    for iteration in range(max_iterations):
-        logger.debug(f"LLM iteration {iteration + 1}/{max_iterations}")
+        # Agentic loop
+        max_iterations = 10  # Prevent infinite loops
+        used_fallback = False
 
-        # Call LLM with tools
-        response = await call_llm_with_fallback(
-            messages=messages,
-            tools=tools if tools else None,
-            max_tokens=4096,
-        )
+        for iteration in range(max_iterations):
+            logger.debug(f"LLM iteration {iteration + 1}/{max_iterations}")
 
-        used_fallback = used_fallback or response["used_fallback"]
+            # Call LLM with tools
+            response = await call_llm_with_fallback(
+                messages=messages,
+                tools=tools if tools else None,
+                max_tokens=4096,
+            )
 
-        # Check response for tool calls
-        # The response dict should include tool_calls if the LLM wants to use tools
-        tool_calls = response.get("tool_calls", [])
+            used_fallback = used_fallback or response["used_fallback"]
 
-        if not tool_calls:
-            # No tool calls - LLM is done, return content
-            content = response["content"]
+            # Check response for tool calls (now properly returned by LLM provider)
+            tool_calls = response.get("tool_calls", [])
 
-            # Add assistant response to context
-            context.add_message("assistant", content, message_ts)
+            if not tool_calls:
+                # No tool calls - LLM is done, return content
+                content = response["content"]
 
-            # Save context
-            store = get_store()
-            await store.save(context)
+                # Add assistant response to context
+                context.add_message("assistant", content, message_ts)
 
-            return content, used_fallback
+                # Save context
+                store = get_store()
+                await store.save(context)
 
-        # Execute tool calls
-        logger.info(f"Executing {len(tool_calls)} tool calls")
+                return content, used_fallback
 
-        # Add assistant message with tool calls to conversation
-        messages.append({
-            "role": "assistant",
-            "content": response.get("content", ""),
-            "tool_calls": tool_calls
-        })
+            # Execute tool calls
+            logger.info(f"Executing {len(tool_calls)} tool calls")
 
-        # Execute each tool and add results
-        for tool_call in tool_calls:
-            tool_name = tool_call["function"]["name"]
-            tool_args = json.loads(tool_call["function"]["arguments"])
-
-            # Execute tool
-            tool_result = await execute_tool(tool_name, tool_args)
-
-            # Add tool result to messages
+            # Add assistant message with tool calls to conversation
             messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call["id"],
-                "content": tool_result
+                "role": "assistant",
+                "content": response.get("content", ""),
+                "tool_calls": tool_calls
             })
 
-    # Max iterations reached
-    logger.warning("Max iterations reached in agentic loop")
-    return ":warning: I wasn't able to complete your request. Please try rephrasing your question.", used_fallback
+            # Execute each tool and add results (reuses MCP sessions within this message)
+            for tool_call in tool_calls:
+                tool_name = tool_call["function"]["name"]
+                tool_args = json.loads(tool_call["function"]["arguments"])
+
+                # Execute tool via MCP client (sessions reused within this message)
+                logger.info(f"Executing tool: {tool_name}")
+                tool_result = await mcp_client.call_tool(tool_name, tool_args)
+
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": tool_result
+                })
+
+        # Max iterations reached
+        logger.warning("Max iterations reached in agentic loop")
+        return ":warning: I wasn't able to complete your request. Please try rephrasing your question.", used_fallback
+
+    finally:
+        # Always close the MCP client to clean up HTTP connections
+        await mcp_client.close()
 ```
 
 ### Success Criteria
@@ -1499,10 +1726,10 @@ if __name__ == "__main__":
 
 ---
 
-## Phase 6: Docker Configuration
+## Phase 6: Docker Configuration (Optional)
 
 ### Overview
-Create Dockerfile for the Slack bot and update docker-compose.yml to add it as a service.
+Create Dockerfile for standalone deployment. The bot can run locally during development or in Docker for production.
 
 ### Changes Required
 
@@ -1530,129 +1757,95 @@ ENV PYTHONUNBUFFERED=1
 ENV THREAD_CONTEXT_DB=/data/thread_contexts.db
 
 # Run the bot
-CMD ["python", "slack_bot/app.py"]
+CMD ["python", "-m", "slack_bot.app"]
 ```
 
-#### 6.2 Update docker-compose.yml
+#### 6.2 Create docker-compose.yml (Standalone)
 
-**File**: `docker-compose.yml`
-**Changes**: Add slack-bot service
+**File**: `slack_bot/docker-compose.yml`
+
+This is a standalone docker-compose for the Slack bot only. It connects to Company-MCP servers running elsewhere.
 
 ```yaml
 version: '3.8'
 
 services:
-  mcp:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    volumes:
-      - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  chatbot:
-    build:
-      context: .
-      dockerfile: chatbot/Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - MCP_SERVER_URL=http://mcp:8000
-    depends_on:
-      mcp:
-        condition: service_healthy
-
   slack-bot:
     build:
       context: .
-      dockerfile: slack_bot/Dockerfile
+      dockerfile: Dockerfile
     environment:
       # Slack credentials
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
       - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
       - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+
+      # MCP Server URLs (Company-MCP running separately)
+      # Use host.docker.internal to reach services on host machine
+      - MCP_SYNTH_URL=${MCP_SYNTH_URL:-http://host.docker.internal:8001}
+      - MCP_POSTGRES_URL=${MCP_POSTGRES_URL:-http://host.docker.internal:8002}
+
       # LLM configuration
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LLM_PRIMARY_MODEL=${LLM_PRIMARY_MODEL:-anthropic/claude-3-5-haiku-20241022}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-gpt-4o}
       - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-true}
-      # Database connections (for sql_service)
-      - POSTGRES_HOST=${POSTGRES_HOST}
-      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - SNOWFLAKE_ACCOUNT=${SNOWFLAKE_ACCOUNT}
-      - SNOWFLAKE_USER=${SNOWFLAKE_USER}
-      - SNOWFLAKE_PASSWORD=${SNOWFLAKE_PASSWORD}
-      - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE}
-      - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE}
-      # MCP server
-      - MCP_SERVER_URL=http://mcp:8000
+
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - slack_bot_data:/data
-    depends_on:
-      mcp:
-        condition: service_healthy
     restart: unless-stopped
-
-  sftp:
-    image: atmoz/sftp
-    ports:
-      - "2222:22"
-    volumes:
-      - ./data:/home/user/data
-    command: user:pass:1001
+    # Note: No depends_on - MCP servers are external to this compose file
+    # Ensure Company-MCP services are running before starting this bot
 
 volumes:
   slack_bot_data:
 ```
 
-#### 6.3 Update .env.example
+#### 6.3 Create .env.example
 
-**File**: `.env.example`
-**Changes**: Add Slack bot configuration
+**File**: `slack_bot/.env.example`
 
 ```bash
-# Existing variables...
-OPENAI_API_KEY=sk-...
-OPENROUTER_API_KEY=sk-or-...
-
+# =============================================================================
 # Slack Bot Configuration
+# =============================================================================
+
+# Slack credentials (from https://api.slack.com/apps)
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-level-token
 SLACK_SIGNING_SECRET=your-signing-secret
 
+# =============================================================================
+# MCP Server URLs
+# =============================================================================
+# These point to Company-MCP servers (running separately)
+# Defaults work for local development with Company-MCP on same machine
+
+MCP_SYNTH_URL=http://localhost:8001
+MCP_POSTGRES_URL=http://localhost:8002
+
+# =============================================================================
 # LLM Configuration
+# =============================================================================
+
+# OpenRouter for Claude (primary)
+OPENROUTER_API_KEY=sk-or-...
+
+# OpenAI for GPT-4o (fallback)
+OPENAI_API_KEY=sk-...
+
+# Model selection (optional - these are the defaults)
 LLM_PRIMARY_MODEL=anthropic/claude-3-5-haiku-20241022
 LLM_FALLBACK_MODEL=gpt-4o
 LLM_FALLBACK_ENABLED=true
 
-# Database Connections (for SQL execution)
-POSTGRES_HOST=your-postgres-host
-POSTGRES_PORT=5432
-POSTGRES_DB=your-database
-POSTGRES_USER=your-user
-POSTGRES_PASSWORD=your-password
-
-SNOWFLAKE_ACCOUNT=your-account
-SNOWFLAKE_USER=your-user
-SNOWFLAKE_PASSWORD=your-password
-SNOWFLAKE_WAREHOUSE=your-warehouse
-SNOWFLAKE_DATABASE=your-database
-
+# =============================================================================
 # Logging
+# =============================================================================
+
 LOG_LEVEL=INFO
 ```
 
@@ -1840,7 +2033,9 @@ N/A - This is a new service, no migration needed.
 
 ## References
 
-- Research document: `thoughts/shared/research/2025-12-14-slack-bot-mcp-integration.md`
+- Initial Research: `thoughts/shared/research/2025-12-14-slack-bot-mcp-integration.md`
+- Architecture Research: `thoughts/shared/research/2025-12-16-company-mcp-master-branch-architecture.md`
 - TribalAgent fallback logic: `TribalAgent/src/utils/llm.ts:707-939`
+- Company-MCP master branch MCP client: `Company-MCP/frontend/main.py:541-619`
+- Company-MCP agentic loop: `Company-MCP/frontend/main.py:698-918`
 - Slack Bolt Python docs: https://slack.dev/bolt-python/
-- Company-MCP chatbot_UI branch: https://github.com/nstjuliana/company-mcp/tree/chatbot_UI
