@@ -570,7 +570,7 @@ async def handle_reaction_added(event: dict, client: AsyncWebClient):
                 )
     
     # 🔄 Refresh emoji - Clear cache and re-run
-    elif reaction == "arrows_counterclockwise" and cache_store:
+    elif reaction in ("arrows_counterclockwise", "repeat") and cache_store:
         # Delete from cache
         deleted = await cache_store.delete_by_question(question)
         
